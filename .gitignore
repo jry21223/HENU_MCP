@@ -1,9 +1,6 @@
-
 *.pyc
 .DS_Store
 __pycache__/
-.env
-data/
 henu_library_cookies.json
 henu_cookies.json
 henu_profile.json
