@@ -71,6 +71,62 @@ def _to_minutes(hhmm: str) -> int:
     return int(hour) * 60 + int(minute)
 
 
+def _normalize_teaching_period_times(
+    period_times: dict[str, dict[str, str]],
+) -> tuple[dict[str, dict[str, str]], dict[str, Any]]:
+    """
+    规范化节次配置：
+    1) 按开始时间排序
+    2) 当节次数较多(>=13)时，剔除中午短节次(12:00-14:10 且时长 20-35 分钟)
+    3) 重新连续编号为 1..N，避免中午插入导致后续节次错位
+    """
+    items: list[tuple[int, str, str]] = []
+    for key, cfg in (period_times or {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        start = str(cfg.get("start", "")).strip()
+        end = str(cfg.get("end", "")).strip()
+        if not (_is_hhmm(start) and _is_hhmm(end)):
+            continue
+        if _to_minutes(start) >= _to_minutes(end):
+            continue
+        try:
+            period_no = int(str(key))
+        except Exception:
+            period_no = 999
+        items.append((period_no, start, end))
+
+    if not items:
+        return {}, {"applied": False, "removed_midday_count": 0}
+
+    items.sort(key=lambda x: (_to_minutes(x[1]), x[0]))
+    removed_midday: list[tuple[int, str, str]] = []
+
+    if len(items) >= 13:
+        for period_no, start, end in items:
+            start_min = _to_minutes(start)
+            duration = _to_minutes(end) - start_min
+            if 12 * 60 <= start_min <= (14 * 60 + 10) and 20 <= duration <= 35:
+                removed_midday.append((period_no, start, end))
+        if removed_midday and (len(items) - len(removed_midday) >= 12):
+            removed_set = {(x[0], x[1], x[2]) for x in removed_midday}
+            items = [it for it in items if it not in removed_set]
+        else:
+            removed_midday = []
+
+    normalized: dict[str, dict[str, str]] = {}
+    for idx, (_, start, end) in enumerate(items, start=1):
+        normalized[str(idx)] = {"start": start, "end": end}
+
+    return normalized, {
+        "applied": True,
+        "removed_midday_count": len(removed_midday),
+        "removed_midday_periods": [
+            {"period": p, "start": s, "end": e} for p, s, e in removed_midday
+        ],
+    }
+
+
 def _load_period_times() -> dict[str, dict[str, str]]:
     if PERIOD_TIME_FILE.exists():
         try:
@@ -85,7 +141,10 @@ def _load_period_times() -> dict[str, dict[str, str]]:
                     if _is_hhmm(start) and _is_hhmm(end):
                         cleaned[str(k)] = {"start": start, "end": end}
                 if cleaned:
-                    return cleaned
+                    normalized, meta = _normalize_teaching_period_times(cleaned)
+                    if normalized and normalized != cleaned and meta.get("removed_midday_count", 0) > 0:
+                        _save_period_times(normalized)
+                    return normalized or cleaned
         except Exception:
             pass
 
@@ -361,6 +420,7 @@ def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
     updated_count = 0
     best_source = ""
     best_matches: dict[str, dict[str, str]] = {}
+    normalization_meta: dict[str, Any] = {"applied": False, "removed_midday_count": 0}
     xiqueer_result = _fetch_xiqueer_period_times()
 
     # 1) 优先 xiqueer API
@@ -381,6 +441,11 @@ def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
                 best_source = source
 
     if len(best_matches) >= 4:
+        normalized_matches, normalization_meta = _normalize_teaching_period_times(best_matches)
+        if normalized_matches:
+            best_matches = normalized_matches
+
+    if len(best_matches) >= 4:
         for period, cfg in best_matches.items():
             old = period_times.get(period)
             if old != cfg:
@@ -396,6 +461,8 @@ def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
         message = "已从教务作息页面自动校准"
     else:
         message = "未抓取到可用节次时间，保留现有配置"
+    if success and int(normalization_meta.get("removed_midday_count", 0) or 0) > 0:
+        message += f"，已剔除中午短节次 {int(normalization_meta.get('removed_midday_count', 0) or 0)} 个"
 
     new_state = {
         "last_attempt_at": now.isoformat(timespec="seconds"),
@@ -407,6 +474,7 @@ def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
         "xiqueer_success": bool(xiqueer_result.get("success")),
         "xiqueer_msg": str(xiqueer_result.get("msg", "")),
         "xiqueer_matched_period_count": int(xiqueer_result.get("matched_period_count", 0) or 0),
+        "normalization": normalization_meta,
     }
     _save_calibration_state(new_state)
 
@@ -418,6 +486,7 @@ def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
         "source": best_source,
         "period_times_matched": best_matches,
         "current_period_times": period_times,
+        "normalization": normalization_meta,
         "xiqueer_result": {
             "success": bool(xiqueer_result.get("success")),
             "msg": str(xiqueer_result.get("msg", "")),
