@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+.DS_Store
+output/
+henu_profile.json
+henu_cookies.json
+henu_library_cookies.json
+xiqueer_period_time_request.json
+data/

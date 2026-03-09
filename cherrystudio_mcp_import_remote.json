@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "henu-campus-remote": {
+      "type": "streamableHttp",
+      "baseUrl": "https://<YOUR_DOMAIN>/mcp",
+      "url": "https://<YOUR_DOMAIN>/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_MCP_API_TOKEN>"
+      }
+    }
+  }
+}

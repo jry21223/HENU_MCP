@@ -1,0 +1,45 @@
+name: henu-campus-unified
+
+services:
+  henu-mcp:
+    build: .
+    image: henu-campus-unified:latest
+    container_name: henu-mcp
+    restart: unless-stopped
+    expose:
+      - "18001"
+    environment:
+      TZ: Asia/Shanghai
+      HENU_STUDENT_ID: ${HENU_STUDENT_ID:-}
+      HENU_PASSWORD: ${HENU_PASSWORD:-}
+    command: >-
+      python mcp_server.py --transport streamable-http --host 0.0.0.0 --port 18001 --path /mcp --stateless-http
+    volumes:
+      - ./data/output:/app/output
+      - ./data/henu_profile.json:/app/henu_profile.json
+      - ./data/henu_cookies.json:/app/henu_cookies.json
+      - ./data/henu_library_cookies.json:/app/henu_library_cookies.json
+      - ./data/period_time_config.json:/app/period_time_config.json
+      - ./data/period_time_calibration_state.json:/app/period_time_calibration_state.json
+      - ./data/xiqueer_period_time_request.json:/app/xiqueer_period_time_request.json
+
+  caddy:
+    image: caddy:2.8
+    container_name: henu-mcp-caddy
+    restart: unless-stopped
+    depends_on:
+      - henu-mcp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MCP_DOMAIN: ${MCP_DOMAIN}
+      MCP_API_TOKEN: ${MCP_API_TOKEN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta
@@ -29,7 +30,16 @@ BASE_DIR = Path(__file__).resolve().parent
 PERIOD_TIME_FILE = BASE_DIR / "period_time_config.json"
 PERIOD_CALIBRATION_STATE_FILE = BASE_DIR / "period_time_calibration_state.json"
 XIQUEER_REQUEST_FILE = BASE_DIR / "xiqueer_period_time_request.json"
-LIBRARY_CORE_DIR = BASE_DIR.parent / "图书馆自动预约" / "web"
+ENV_STUDENT_ID_KEY = "HENU_STUDENT_ID"
+ENV_PASSWORD_KEY = "HENU_PASSWORD"
+LIBRARY_CORE_CANDIDATES = [
+    BASE_DIR / "library_core",
+    BASE_DIR.parent / "图书馆自动预约" / "web",
+]
+LIBRARY_CORE_DIR = next(
+    (p for p in LIBRARY_CORE_CANDIDATES if (p / "henu_core.py").exists()),
+    LIBRARY_CORE_CANDIDATES[0],
+)
 LIBRARY_COOKIE_FILE = BASE_DIR / "henu_library_cookies.json"
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 DEFAULT_PERIOD_TIMES: dict[str, dict[str, str]] = {
@@ -543,11 +553,20 @@ def _effective_profile() -> dict[str, Any]:
     return load_json(PROFILE_FILE)
 
 
+def _env_account() -> tuple[str, str]:
+    sid = str(os.getenv(ENV_STUDENT_ID_KEY, "") or "").strip()
+    pwd = str(os.getenv(ENV_PASSWORD_KEY, "") or "")
+    return sid, pwd
+
+
 def _mask_profile(profile: dict[str, Any]) -> dict[str, Any]:
     location, seat_no = _resolve_library_defaults()
+    env_sid, env_pwd = _env_account()
     return {
         "student_id": str(profile.get("student_id", "") or ""),
         "has_password": bool(profile.get("password")),
+        "env_student_id_set": bool(env_sid),
+        "env_password_set": bool(env_pwd),
         "library_default_location": location,
         "library_default_seat_no": seat_no,
         "profile_file": str(PROFILE_FILE),
@@ -562,9 +581,10 @@ def _resolve_account(student_id: str, password: str, use_saved_account: bool = T
     if not use_saved_account:
         return sid, pwd
 
+    env_sid, env_pwd = _env_account()
     profile = _effective_profile()
-    sid = sid or str(profile.get("student_id", "") or "")
-    pwd = pwd or str(profile.get("password", "") or "")
+    sid = sid or env_sid or str(profile.get("student_id", "") or "")
+    pwd = pwd or env_pwd or str(profile.get("password", "") or "")
     return sid, pwd
 
 
@@ -758,12 +778,17 @@ def save_account(
     home_url: str = DEFAULT_HOME_URL,
     library_location: str = "",
     library_seat_no: str = "",
+    save_password: bool = True,
 ) -> dict[str, Any]:
     """保存课表账号；可选立即验证统一认证登录。"""
     sid = str(student_id or "").strip()
     pwd = str(password or "")
+    sid, pwd = _resolve_account(sid, pwd, use_saved_account=True)
     if not sid or not pwd:
-        return {"success": False, "msg": "student_id/password 不能为空"}
+        return {
+            "success": False,
+            "msg": f"student_id/password 不能为空，且环境变量 {ENV_STUDENT_ID_KEY}/{ENV_PASSWORD_KEY} 未提供可用值",
+        }
 
     context: dict[str, Any] = {}
     if verify_login:
@@ -773,7 +798,12 @@ def save_account(
         save_json(COOKIE_FILE, client.get_cookies())
         context = client.fetch_user_context()
 
-    fields: dict[str, Any] = {"student_id": sid, "password": pwd}
+    fields: dict[str, Any] = {"student_id": sid}
+    if save_password:
+        fields["password"] = pwd
+    else:
+        # 显式清空，避免旧密码残留在本地文件
+        fields["password"] = ""
     if str(library_location or "").strip():
         fields["library_location"] = str(library_location).strip()
     if str(library_seat_no or "").strip():
@@ -781,7 +811,7 @@ def save_account(
     _save_profile_fields(fields)
     return {
         "success": True,
-        "msg": "账号已保存",
+        "msg": "账号已保存（未明文落盘密码）" if not save_password else "账号已保存",
         "account": _mask_profile(_effective_profile()),
         "context": {
             "login_id": context.get("login_id", ""),
@@ -1106,12 +1136,13 @@ def _library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]
 
 @mcp.tool()
 def setup_account(
-    student_id: str,
-    password: str,
+    student_id: str = "",
+    password: str = "",
     library_location: str = "",
     library_seat_no: str = "",
     verify_login: bool = True,
     calibrate_period_time: bool = True,
+    save_password: bool = True,
 ) -> dict[str, Any]:
     """
     一站式初始化账号：
@@ -1126,6 +1157,7 @@ def setup_account(
         home_url=DEFAULT_HOME_URL,
         library_location=library_location,
         library_seat_no=library_seat_no,
+        save_password=save_password,
     )
     if not result.get("success"):
         return result
