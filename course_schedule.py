@@ -17,8 +17,8 @@ from schedule_cleaner import clean_schedule_grid_file
 
 
 BASE_DIR = Path(__file__).resolve().parent
-COOKIE_FILE = BASE_DIR / "henu_xk_cookies.json"
-PROFILE_FILE = BASE_DIR / "henu_xk_profile.json"
+COOKIE_FILE = BASE_DIR / "henu_cookies.json"
+PROFILE_FILE = BASE_DIR / "henu_profile.json"
 DEFAULT_HOME_URL = "https://xk.henu.edu.cn/frame/homes.action?v=07364432695342088912561"
 OUTPUT_DIR = BASE_DIR / "output"
 

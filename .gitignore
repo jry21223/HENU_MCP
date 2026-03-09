@@ -3,7 +3,7 @@
 .DS_Store
 __pycache__/
 henu_library_cookies.json
-henu_xk_cookies.json
-henu_xk_profile.json
+henu_cookies.json
+henu_profile.json
 output/
 xiqueer_period_time_request.json

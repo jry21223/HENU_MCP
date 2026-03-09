@@ -4,7 +4,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "cd \"/Users/jerry/Desktop/Study/HENU_MCP/课表查看\" && /Users/jerry/.pyenv/versions/3.11.14/bin/python3 mcp_server.py --transport stdio"
+        "cd \"<YOUR_HENU_MCP_DIR>/课表查看\" && python3 mcp_server.py --transport stdio"
       ]
     }
   }
