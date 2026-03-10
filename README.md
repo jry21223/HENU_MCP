@@ -26,73 +26,59 @@ pip install -r requirements.txt
 
 ### 2. 配置MCP客户端
 
-根据你的使用环境选择合适的配置方式：
-
-#### 方式1：本地Python环境（推荐）
-
-```json
-{
-  "mcpServers": {
-    "henu-campus": {
-      "command": "python3",
-      "args": ["/完整路径/到/HENU_MCP/mcp_server.py"],
-      "transport": "stdio"
-    }
-  }
-}
-```
-
-**注意**: 请将 `/完整路径/到/HENU_MCP/mcp_server.py` 替换为你实际的文件路径。
-
-#### 方式2：使用绝对路径和环境变量
-
-```json
-{
-  "mcpServers": {
-    "henu-campus": {
-      "command": "python3",
-      "args": ["/Users/你的用户名/HENU_MCP/mcp_server.py"],
-      "transport": "stdio",
-      "env": {
-        "PYTHONPATH": "/Users/你的用户名/HENU_MCP"
-      }
-    }
-  }
-}
-```
-
-#### 方式3：使用uvx（需要先安装uv）
-
-```bash
-# 安装uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+推荐使用以下配置格式（使用uvx）：
 
 ```json
 {
   "mcpServers": {
     "henu-campus": {
       "command": "uvx",
-      "args": ["--from", "/完整路径/到/HENU_MCP", "python", "mcp_server.py"],
+      "args": ["-y", "python", "/Users/jerry/HENU_MCP/mcp_server.py"],
       "transport": "stdio"
     }
   }
 }
 ```
 
-#### 获取正确的文件路径
+**注意**: 请将路径 `/Users/jerry/HENU_MCP/mcp_server.py` 替换为你实际的文件路径。
 
-在终端中运行以下命令获取正确的路径：
+#### 获取正确路径的方法：
 
 ```bash
-# 进入你的HENU_MCP目录
+# 进入mcp-server分支的目录
 cd /path/to/your/HENU_MCP
-# 获取绝对路径
+git checkout mcp-server
 pwd
-# 输出类似：/Users/jerry/HENU_MCP
+# 复制输出的路径，然后在后面加上 /mcp_server.py
 ```
 
-然后将输出的路径替换到配置中：`/Users/jerry/HENU_MCP/mcp_server.py`
+#### 其他配置选项：
+
+**使用npx（如果你有Node.js环境）：**
+```json
+{
+  "mcpServers": {
+    "henu-campus": {
+      "command": "npx",
+      "args": ["-y", "python3", "/完整路径/mcp_server.py"],
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+**直接使用python3（备选方案）：**
+```json
+{
+  "mcpServers": {
+    "henu-campus": {
+      "command": "python3",
+      "args": ["/完整路径/mcp_server.py"],
+      "transport": "stdio"
+    }
+  }
+}
+```
 
 ### 3. 可用工具
 

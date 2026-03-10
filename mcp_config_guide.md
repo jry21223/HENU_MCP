@@ -32,42 +32,38 @@
 
 ## 正确的配置示例
 
-### 1. 基础配置（最常用）
+### 1. 推荐配置（使用uvx）
 ```json
 {
   "mcpServers": {
     "henu-campus": {
-      "command": "python3",
-      "args": ["/Users/你的用户名/HENU_MCP/mcp_server.py"],
+      "command": "uvx",
+      "args": ["-y", "python", "/Users/你的用户名/HENU_MCP/mcp_server.py"],
       "transport": "stdio"
     }
   }
 }
 ```
 
-### 2. 带环境变量的配置
+### 2. 使用npx（如果有Node.js）
 ```json
 {
   "mcpServers": {
     "henu-campus": {
-      "command": "python3",
-      "args": ["/Users/你的用户名/HENU_MCP/mcp_server.py"],
-      "transport": "stdio",
-      "env": {
-        "PYTHONPATH": "/Users/你的用户名/HENU_MCP",
-        "DEBUG": "1"
-      }
+      "command": "npx",
+      "args": ["-y", "python3", "/Users/你的用户名/HENU_MCP/mcp_server.py"],
+      "transport": "stdio"
     }
   }
 }
 ```
 
-### 3. 使用虚拟环境
+### 3. 直接使用python（备选）
 ```json
 {
   "mcpServers": {
     "henu-campus": {
-      "command": "/Users/你的用户名/HENU_MCP/venv/bin/python",
+      "command": "python3",
       "args": ["/Users/你的用户名/HENU_MCP/mcp_server.py"],
       "transport": "stdio"
     }
