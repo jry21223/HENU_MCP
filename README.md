@@ -26,8 +26,27 @@ pip install -r requirements.txt
 
 ### 2. 配置MCP客户端
 
-推荐使用以下配置格式（使用uvx）：
+#### Cherry Studio 配置（推荐）
 
+```json
+{
+  "mcpServers": {
+    "henu-campus": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "cd \"/Users/jerry/HENU_MCP\" && python3 mcp_server.py --transport stdio"
+      ]
+    }
+  }
+}
+```
+
+**注意**: 请将路径 `/Users/jerry/HENU_MCP` 替换为你实际的项目路径。
+
+#### 其他MCP客户端配置
+
+**使用uvx：**
 ```json
 {
   "mcpServers": {
@@ -40,40 +59,13 @@ pip install -r requirements.txt
 }
 ```
 
-**注意**: 请将路径 `/Users/jerry/HENU_MCP/mcp_server.py` 替换为你实际的文件路径。
-
-#### 获取正确路径的方法：
-
-```bash
-# 进入mcp-server分支的目录
-cd /path/to/your/HENU_MCP
-git checkout mcp-server
-pwd
-# 复制输出的路径，然后在后面加上 /mcp_server.py
-```
-
-#### 其他配置选项：
-
-**使用npx（如果你有Node.js环境）：**
-```json
-{
-  "mcpServers": {
-    "henu-campus": {
-      "command": "npx",
-      "args": ["-y", "python3", "/完整路径/mcp_server.py"],
-      "transport": "stdio"
-    }
-  }
-}
-```
-
-**直接使用python3（备选方案）：**
+**直接使用python3：**
 ```json
 {
   "mcpServers": {
     "henu-campus": {
       "command": "python3",
-      "args": ["/完整路径/mcp_server.py"],
+      "args": ["/Users/jerry/HENU_MCP/mcp_server.py"],
       "transport": "stdio"
     }
   }
