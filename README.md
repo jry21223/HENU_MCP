@@ -1,98 +1,114 @@
-# 河南大学校园助手
+# 河大校园助手 - OpenClaw Skill版本
 
-为河南大学学生提供教务系统课表查询和图书馆座位预约的一体化解决方案。
+这是一个为河南大学学生设计的OpenClaw skill，提供教务系统课表查询和图书馆座位预约功能。
 
-## 项目分支
+## 项目分支说明
 
-本项目提供两种不同的实现方式，分别位于不同的分支：
-
-### 🔧 MCP服务器版本
-**分支**: [`mcp-server`](https://github.com/jry21223/HENU_MCP/tree/mcp-server)
-- 基于Model Context Protocol (MCP)
-- 适用于支持MCP协议的AI客户端
-- 提供完整的工具集和API接口
-- 适合开发者和高级用户
-
-### 💬 OpenClaw Skill版本
-**分支**: [`openclaw-skill`](https://github.com/jry21223/HENU_MCP/tree/openclaw-skill)
-- 专为OpenClaw设计的skill
-- 支持自然语言交互
-- 零配置，开箱即用
-- 适合普通用户日常使用
-
-## 如何选择和使用
-
-### 使用MCP服务器版本
-```bash
-git clone -b mcp-server https://github.com/jry21223/HENU_MCP.git
-cd HENU_MCP
-pip install -r requirements.txt
-python mcp_server.py
-```
-
-### 使用OpenClaw Skill版本
-```bash
-git clone -b openclaw-skill https://github.com/jry21223/HENU_MCP.git
-cp -r HENU_MCP ~/.openclaw/workspace/skills/henu_campus_assistant
-cd ~/.openclaw/workspace/skills/henu_campus_assistant
-pip install -r requirements.txt
-```
+- **当前分支**: `openclaw-skill` - OpenClaw Skill实现
+- **其他分支**: [`mcp-server`](https://github.com/jry21223/HENU_MCP/tree/mcp-server) - MCP服务器版本
+- **主分支**: [`main`](https://github.com/jry21223/HENU_MCP) - 项目概述和导航
 
 ## 功能特性
 
-### 📚 教务系统集成
-- 自动登录河大教务系统
-- 获取个人课表信息
-- 实时查询当前课程状态
-- 智能识别下一节课时间
+- 🎓 **智能课表**: 查询个人课表、当前课程、下一节课信息
+- 📚 **图书馆服务**: 预约座位、查询预约记录、取消预约
+- 🔐 **安全存储**: 账号信息本地加密存储，不会上传
+- 💬 **自然交互**: 支持自然语言对话，无需记忆命令
+- ⚡ **即时响应**: 快速获取课程和预约信息
 
-### 🏛️ 图书馆服务
-- 座位预约功能
-- 预约记录查询
-- 一键取消预约
-- 支持多个图书馆区域
+## 快速开始
 
-### 🔐 安全特性
-- 本地加密存储账号信息
-- 会话保持，减少重复登录
-- 不上传任何个人数据
-- 支持多账号管理
+### 1. 安装skill
 
-## 版本对比
+```bash
+# 克隆OpenClaw skill分支
+git clone -b openclaw-skill https://github.com/jry21223/HENU_MCP.git henu_campus_assistant
 
-| 特性 | MCP服务器版本 | OpenClaw Skill版本 |
-|------|---------------|-------------------|
-| 部署复杂度 | 中等 | 简单 |
-| 使用方式 | 工具调用 | 自然对话 |
-| 客户端支持 | MCP兼容客户端 | OpenClaw |
-| 功能完整性 | 完整 | 完整 |
-| 适用场景 | 开发集成 | 日常使用 |
+# 复制到OpenClaw skills目录
+cp -r henu_campus_assistant ~/.openclaw/workspace/skills/
 
-## 系统要求
+# 安装依赖
+cd ~/.openclaw/workspace/skills/henu_campus_assistant
+pip3 install -r requirements.txt
+```
 
-- Python 3.9+
-- 河南大学学生账号
-- 网络连接（访问教务系统和图书馆系统）
+### 2. 在OpenClaw中刷新skills
 
-## 贡献指南
+重启OpenClaw Gateway或使用刷新命令
 
-欢迎提交Issue和Pull Request来改进项目：
+### 3. 开始使用
 
-1. Fork本仓库
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启Pull Request
+直接与OpenClaw对话：
 
-## 许可证
+```
+你: "帮我设置河大账号，学号是2021001，密码是mypassword"
+你: "查看今天的课表"
+你: "现在在上什么课？"
+你: "帮我预约图书馆座位"
+```
 
-本项目采用MIT许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
+## 支持的对话示例
 
-## 免责声明
+### 课表相关
+- "我今天有什么课？"
+- "现在在上什么课？"
+- "下一节课是什么？"
+- "帮我同步最新课表"
 
-本项目仅供学习和个人使用，请遵守学校相关规定。使用本工具产生的任何后果由用户自行承担。
+### 图书馆相关
+- "预约图书馆座位"
+- "查看我的预约记录"
+- "取消图书馆预约"
+- "有哪些图书馆区域可以预约？"
 
-## 更新日志
+### 账号管理
+- "设置我的河大账号"
+- "查看系统状态"
 
-- **v2.0.0** - 添加OpenClaw Skill支持，重构项目结构
-- **v1.0.0** - 初始版本，支持MCP协议
+## 项目结构
+
+```
+openclaw-skill/
+├── SKILL.md              # OpenClaw skill定义
+├── henu_cli.py          # 命令行接口
+├── scripts/
+│   └── henu_campus_mcp.py # 核心功能模块
+├── requirements.txt      # Python依赖
+├── README.md            # 本文档
+└── MIGRATION.md         # 迁移说明
+```
+
+## 技术特点
+
+- **零配置**: 无需复杂的MCP服务器配置
+- **轻量级**: 移除了MCP框架依赖
+- **兼容性**: 保持与原MCP版本的功能兼容
+- **可扩展**: 易于添加新功能和改进
+
+## 故障排除
+
+### 常见问题
+
+1. **登录失败**
+   - 检查学号密码是否正确
+   - 确认河大CAS系统正常运行
+
+2. **图书馆功能不可用**
+   - 图书馆模块为可选功能
+   - 检查是否有library_core依赖
+
+3. **课表解析失败**
+   - 可能是教务系统页面结构变更
+   - 查看错误日志获取详细信息
+
+### 获取帮助
+
+如果遇到问题，可以：
+1. 查看 [MIGRATION.md](MIGRATION.md) 了解技术细节
+2. 检查OpenClaw日志获取错误信息
+3. 在项目仓库提交issue
+
+## 相关分支
+
+- [MCP服务器版本](https://github.com/jry21223/HENU_MCP/tree/mcp-server) - 适用于支持MCP协议的客户端
+- [项目主页](https://github.com/jry21223/HENU_MCP) - 项目概述和版本选择指南
