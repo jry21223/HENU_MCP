@@ -2,21 +2,41 @@
 
 为河南大学学生提供教务系统课表查询和图书馆座位预约的一体化解决方案。
 
-## 项目概述
+## 项目分支
 
-本项目提供两种不同的实现方式，满足不同使用场景的需求：
+本项目提供两种不同的实现方式，分别位于不同的分支：
 
-### 🔧 [MCP服务器版本](./mcp-server/)
+### 🔧 MCP服务器版本
+**分支**: [`mcp-server`](https://github.com/jry21223/HENU_MCP/tree/mcp-server)
 - 基于Model Context Protocol (MCP)
 - 适用于支持MCP协议的AI客户端
 - 提供完整的工具集和API接口
 - 适合开发者和高级用户
 
-### 💬 [OpenClaw Skill版本](./openclaw-skill/)
+### 💬 OpenClaw Skill版本
+**分支**: [`openclaw-skill`](https://github.com/jry21223/HENU_MCP/tree/openclaw-skill)
 - 专为OpenClaw设计的skill
 - 支持自然语言交互
 - 零配置，开箱即用
 - 适合普通用户日常使用
+
+## 如何选择和使用
+
+### 使用MCP服务器版本
+```bash
+git clone -b mcp-server https://github.com/jry21223/HENU_MCP.git
+cd HENU_MCP
+pip install -r requirements.txt
+python mcp_server.py
+```
+
+### 使用OpenClaw Skill版本
+```bash
+git clone -b openclaw-skill https://github.com/jry21223/HENU_MCP.git
+cp -r HENU_MCP ~/.openclaw/workspace/skills/henu_campus_assistant
+cd ~/.openclaw/workspace/skills/henu_campus_assistant
+pip install -r requirements.txt
+```
 
 ## 功能特性
 
@@ -38,7 +58,7 @@
 - 不上传任何个人数据
 - 支持多账号管理
 
-## 快速选择
+## 版本对比
 
 | 特性 | MCP服务器版本 | OpenClaw Skill版本 |
 |------|---------------|-------------------|
