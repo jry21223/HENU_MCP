@@ -1,35 +1,78 @@
-# 河大一体化助手（课表 + 图书馆，CAS 登录）
+# 河南大学校园助手
 
-本目录提供统一 MCP 服务，合并了：
+为河南大学学生提供教务系统课表查询和图书馆座位预约的一体化解决方案。
 
-- 教务课表查看（`https://xk.henu.edu.cn`）
-- 图书馆座位预约（`https://zwyy.henu.edu.cn`）
+## 项目概述
 
-## 功能
+本项目提供两种不同的实现方式，满足不同使用场景的需求：
 
-- CAS 登录并自动复用会话
-- 课表同步与结构化输出
-- 当前时段课程判断（含节次自动校准）
-- 图书馆区域查询、预约、记录、取消
+### 🔧 [MCP服务器版本](./mcp-server/)
+- 基于Model Context Protocol (MCP)
+- 适用于支持MCP协议的AI客户端
+- 提供完整的工具集和API接口
+- 适合开发者和高级用户
 
-## 账号与配置文件
+### 💬 [OpenClaw Skill版本](./openclaw-skill/)
+- 专为OpenClaw设计的skill
+- 支持自然语言交互
+- 零配置，开箱即用
+- 适合普通用户日常使用
 
-- 账号配置：`henu_profile.json`
-- 课表 cookies：`henu_cookies.json`
-- 图书馆 cookies：`henu_library_cookies.json`
+## 功能特性
 
-## CherryStudio 导入 JSON
+### 📚 教务系统集成
+- 自动登录河大教务系统
+- 获取个人课表信息
+- 实时查询当前课程状态
+- 智能识别下一节课时间
 
-```json
-{
-  "mcpServers": {
-    "henu-campus-unified": {
-      "command": "bash",
-      "args": [
-        "-lc",
-        "cd \"<YOUR_HENU_MCP_DIR>/课表查看\" && python3 mcp_server.py --transport stdio"
-      ]
-    }
-  }
-}
-```
+### 🏛️ 图书馆服务
+- 座位预约功能
+- 预约记录查询
+- 一键取消预约
+- 支持多个图书馆区域
+
+### 🔐 安全特性
+- 本地加密存储账号信息
+- 会话保持，减少重复登录
+- 不上传任何个人数据
+- 支持多账号管理
+
+## 快速选择
+
+| 特性 | MCP服务器版本 | OpenClaw Skill版本 |
+|------|---------------|-------------------|
+| 部署复杂度 | 中等 | 简单 |
+| 使用方式 | 工具调用 | 自然对话 |
+| 客户端支持 | MCP兼容客户端 | OpenClaw |
+| 功能完整性 | 完整 | 完整 |
+| 适用场景 | 开发集成 | 日常使用 |
+
+## 系统要求
+
+- Python 3.9+
+- 河南大学学生账号
+- 网络连接（访问教务系统和图书馆系统）
+
+## 贡献指南
+
+欢迎提交Issue和Pull Request来改进项目：
+
+1. Fork本仓库
+2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启Pull Request
+
+## 许可证
+
+本项目采用MIT许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
+
+## 免责声明
+
+本项目仅供学习和个人使用，请遵守学校相关规定。使用本工具产生的任何后果由用户自行承担。
+
+## 更新日志
+
+- **v2.0.0** - 添加OpenClaw Skill支持，重构项目结构
+- **v1.0.0** - 初始版本，支持MCP协议
