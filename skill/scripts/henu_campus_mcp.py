@@ -554,8 +554,8 @@ def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> d
 
 
 @mcp.tool()
-def library_cancel(record_id: str) -> dict[str, Any]:
-    """取消图书馆预约。"""
+def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
+    """取消图书馆预约。record_type: 1(普通)/3(研习)/4(考研)/auto(自动检测)"""
     if HenuLibraryBot is None:
         return {"success": False, "msg": "图书馆模块不可用"}
     
@@ -570,7 +570,25 @@ def library_cancel(record_id: str) -> dict[str, Any]:
         return {"success": False, "msg": "图书馆登录失败"}
     
     save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
-    return bot.cancel_seat_record(record_id=str(record_id))
+    
+    # 自动检测 record_type
+    rt = str(record_type or "auto").strip().lower()
+    if rt in {"", "auto"}:
+        resolved = None
+        for candidate in ("1", "3", "4"):
+            records = bot.list_seat_records(record_type=candidate, page=1, limit=100)
+            for row in records.get("records") or []:
+                if str(row.get("id")) == str(record_id):
+                    resolved = candidate
+                    break
+            if resolved:
+                break
+        rt = resolved or "1"
+    
+    result = bot.cancel_seat_record(record_id=str(record_id), record_type=rt)
+    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    result["record_type_resolved"] = rt
+    return result
 
 
 @mcp.tool()
