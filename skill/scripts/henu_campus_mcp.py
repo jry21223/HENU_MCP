@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-HENU Campus Unified MCP Server (精简版)
+HENU Campus Unified Functions (Skill Edition)
+河南大学校园一体化助手 - OpenClaw Skill 版本
 合并功能: 课表查看 + 图书馆座位预约
 """
 
 from __future__ import annotations
 
-import argparse
 import base64
 import json
 import math
@@ -17,16 +17,16 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
 import requests
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from lxml import html
-from mcp.server.fastmcp import FastMCP
 
 # ===== 配置路径 =====
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent  # skill/
 OUTPUT_DIR = BASE_DIR / "output"
 COOKIE_FILE = BASE_DIR / "henu_cookies.json"
 LIBRARY_COOKIE_FILE = BASE_DIR / "henu_library_cookies.json"
@@ -35,17 +35,17 @@ PERIOD_TIME_FILE = BASE_DIR / "period_time_config.json"
 PERIOD_CALIBRATION_STATE_FILE = BASE_DIR / "period_time_calibration_state.json"
 XIQUEER_REQUEST_FILE = BASE_DIR / "xiqueer_period_time_request.json"
 
-# 尝试导入图书馆核心模块
-# 优先级: 1. 环境变量 HENU_LIBRARY_CORE 2. skill 同级目录 3. 原项目相对路径
+# ===== 图书馆核心模块查找 =====
 LIBRARY_CORE_DIR = None
 if os.environ.get("HENU_LIBRARY_CORE"):
     LIBRARY_CORE_DIR = Path(os.environ["HENU_LIBRARY_CORE"])
 else:
-    # 尝试在多个可能的位置查找
     candidates = [
-        BASE_DIR / "library_core",  # skill/library_core/
-        BASE_DIR.parent.parent / "图书馆自动预约" / "web",  # 原项目结构
-        Path.home() / ".config" / "henu" / "library_core",  # 全局配置目录
+        BASE_DIR / "library_core",                          # skill/library_core/
+        BASE_DIR.parent / "library_core",                   # 主项目同级 library_core/
+        BASE_DIR.parent / "图书馆自动预约" / "web",          # 原项目结构
+        BASE_DIR.parent.parent / "图书馆自动预约" / "web",   # 上两级
+        Path.home() / ".config" / "henu" / "library_core",  # 全局配置
     ]
     for candidate in candidates:
         if candidate.exists() and (candidate / "henu_core.py").exists():
@@ -370,11 +370,8 @@ def save_period_times(period_times: dict[str, dict[str, str]]) -> None:
     PERIOD_TIME_FILE.write_text(json.dumps(period_times, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# ===== MCP 服务器 =====
-mcp = FastMCP("henu-campus-unified")
+# ===== 功能函数 =====
 
-
-@mcp.tool()
 def setup_account(student_id: str, password: str, library_location: str = "", library_seat_no: str = "") -> dict[str, Any]:
     """保存账号配置并验证登录。"""
     sid, pwd = str(student_id).strip(), str(password)
@@ -397,7 +394,6 @@ def setup_account(student_id: str, password: str, library_location: str = "", li
     return {"success": True, "msg": "账号已保存", "student_id": sid}
 
 
-@mcp.tool()
 def sync_schedule(xn: str | None = None, xq: str | None = None) -> dict[str, Any]:
     """同步课表（使用已保存账号）。"""
     profile = load_json(PROFILE_FILE)
@@ -445,7 +441,6 @@ def sync_schedule(xn: str | None = None, xq: str | None = None) -> dict[str, Any
         return {"success": False, "msg": f"解析课表失败: {e}", "raw_file": str(grid_file) if 'grid_file' in dir() else None}
 
 
-@mcp.tool()
 def current_course(timezone: str = "Asia/Shanghai") -> dict[str, Any]:
     """获取当前正在上的课和下一节课。"""
     try:
@@ -493,7 +488,6 @@ def current_course(timezone: str = "Asia/Shanghai") -> dict[str, Any]:
     }
 
 
-@mcp.tool()
 def latest_schedule() -> dict[str, Any]:
     """获取最新结构化课表。"""
     try:
@@ -503,7 +497,6 @@ def latest_schedule() -> dict[str, Any]:
         return {"success": False, "msg": str(e)}
 
 
-@mcp.tool()
 def library_locations() -> dict[str, Any]:
     """查看图书馆可预约区域列表。"""
     if HenuLibraryBot is None:
@@ -514,7 +507,6 @@ def library_locations() -> dict[str, Any]:
     ]}
 
 
-@mcp.tool()
 def library_reserve(location: str = "", seat_no: str = "", target_date: str = "", preferred_time: str = "08:00") -> dict[str, Any]:
     """预约图书馆座位。"""
     if HenuLibraryBot is None:
@@ -550,7 +542,6 @@ def library_reserve(location: str = "", seat_no: str = "", target_date: str = ""
     return {"success": result.get("success"), "msg": result.get("msg", ""), "date": target_date}
 
 
-@mcp.tool()
 def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> dict[str, Any]:
     """查询图书馆预约记录。"""
     if HenuLibraryBot is None:
@@ -570,7 +561,6 @@ def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> d
     return bot.list_seat_records(record_type=record_type, page=page, limit=limit)
 
 
-@mcp.tool()
 def library_cancel(record_id: str, record_type: str = "1") -> dict[str, Any]:
     """取消图书馆预约。record_type: 1(普通)/3(研习)/4(考研)，默认1"""
     if HenuLibraryBot is None:
@@ -592,7 +582,6 @@ def library_cancel(record_id: str, record_type: str = "1") -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
 def system_status() -> dict[str, Any]:
     """查看系统状态。"""
     profile = load_json(PROFILE_FILE)
@@ -610,14 +599,5 @@ def system_status() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--transport", default="stdio", choices=["stdio", "sse"])
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8001)
-    args = parser.parse_args()
-    
-    if args.transport == "sse":
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-    
-    mcp.run(transport=args.transport)
+    # 这个文件现在作为模块被CLI调用，不再直接运行MCP服务器
+    print("请使用 henu_cli.py 来调用功能")
