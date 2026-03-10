@@ -10,6 +10,7 @@ import argparse
 import base64
 import json
 import math
+import os
 import random
 import re
 import sys
@@ -35,9 +36,25 @@ PERIOD_CALIBRATION_STATE_FILE = BASE_DIR / "period_time_calibration_state.json"
 XIQUEER_REQUEST_FILE = BASE_DIR / "xiqueer_period_time_request.json"
 
 # 尝试导入图书馆核心模块
-LIBRARY_CORE_DIR = BASE_DIR.parent.parent / "图书馆自动预约" / "web"
-if str(LIBRARY_CORE_DIR) not in sys.path:
+# 优先级: 1. 环境变量 HENU_LIBRARY_CORE 2. skill 同级目录 3. 原项目相对路径
+LIBRARY_CORE_DIR = None
+if os.environ.get("HENU_LIBRARY_CORE"):
+    LIBRARY_CORE_DIR = Path(os.environ["HENU_LIBRARY_CORE"])
+else:
+    # 尝试在多个可能的位置查找
+    candidates = [
+        BASE_DIR / "library_core",  # skill/library_core/
+        BASE_DIR.parent.parent / "图书馆自动预约" / "web",  # 原项目结构
+        Path.home() / ".config" / "henu" / "library_core",  # 全局配置目录
+    ]
+    for candidate in candidates:
+        if candidate.exists() and (candidate / "henu_core.py").exists():
+            LIBRARY_CORE_DIR = candidate
+            break
+
+if LIBRARY_CORE_DIR and str(LIBRARY_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(LIBRARY_CORE_DIR))
+
 try:
     from henu_core import HenuLibraryBot  # type: ignore
 except Exception:
