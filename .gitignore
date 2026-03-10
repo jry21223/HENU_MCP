@@ -1,8 +1,32 @@
+# Python
 *.pyc
-.DS_Store
+*.py[cod]
+*$py.class
 __pycache__/
-henu_library_cookies.json
-henu_cookies.json
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# HENU 配置文件（包含敏感信息）
 henu_profile.json
-output/
+henu_cookies.json
+henu_library_cookies.json
 xiqueer_period_time_request.json
+period_time_calibration_state.json
+period_time_config.json
+
+# 输出目录
+output/
