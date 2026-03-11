@@ -29,7 +29,19 @@ BASE_DIR = Path(__file__).resolve().parent
 PERIOD_TIME_FILE = BASE_DIR / "period_time_config.json"
 PERIOD_CALIBRATION_STATE_FILE = BASE_DIR / "period_time_calibration_state.json"
 XIQUEER_REQUEST_FILE = BASE_DIR / "xiqueer_period_time_request.json"
-LIBRARY_CORE_DIR = BASE_DIR.parent / "图书馆自动预约" / "web"
+
+# 图书馆核心模块路径 - 支持多种可能的位置
+LIBRARY_CORE_CANDIDATES = [
+    BASE_DIR / "library_core",  # 同级目录
+    BASE_DIR.parent / "图书馆自动预约" / "web",  # 原始位置
+    BASE_DIR.parent / "library_core",  # 父级目录
+]
+LIBRARY_CORE_DIR = None
+for candidate in LIBRARY_CORE_CANDIDATES:
+    if candidate.exists() and (candidate / "henu_core.py").exists():
+        LIBRARY_CORE_DIR = candidate
+        break
+
 LIBRARY_COOKIE_FILE = BASE_DIR / "henu_library_cookies.json"
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 DEFAULT_PERIOD_TIMES: dict[str, dict[str, str]] = {
@@ -47,12 +59,14 @@ DEFAULT_PERIOD_TIMES: dict[str, dict[str, str]] = {
     "12": {"start": "19:55", "end": "20:40"},
 }
 
-if str(LIBRARY_CORE_DIR) not in sys.path:
+# 尝试导入图书馆模块
+HenuLibraryBot = None
+if LIBRARY_CORE_DIR and str(LIBRARY_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(LIBRARY_CORE_DIR))
-try:
-    from henu_core import HenuLibraryBot  # type: ignore
-except Exception:
-    HenuLibraryBot = None  # type: ignore
+    try:
+        from henu_core import HenuLibraryBot  # type: ignore
+    except Exception:
+        pass
 
 
 def _now_dt(timezone: str = "Asia/Shanghai") -> datetime:
