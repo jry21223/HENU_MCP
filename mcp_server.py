@@ -1282,8 +1282,12 @@ def library_locations() -> dict[str, Any]:
     【必须调用】查看图书馆区域列表 - 获取所有可预约的图书馆区域
     
     功能：返回图书馆所有区域的名称和ID
+    返回格式：{"success": true, "locations": [{"location": "区域名", "area_id": "ID"}]}
     
-    重要：不要编造区域信息，必须调用此工具获取准确的区域列表。
+    ⚠️ 严禁编造区域信息！
+    - 不要凭空列举区域名称，必须调用此工具获取
+    - 只有此工具返回的区域列表才是准确的
+    - 预约前必须先调用此工具确认可用区域
     """
     if HenuLibraryBot is None:
         return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_DIR}/henu_core.py", "locations": []}
@@ -1304,9 +1308,17 @@ def library_reserve(
     【必须调用】预约图书馆座位 - 执行真实的座位预约操作
     
     功能：向图书馆系统提交座位预约请求
+    参数：
+    - location: 图书馆区域名称（如"一楼东"）
+    - seat_no: 座位号（如"001"）
+    - target_date: 预约日期（格式：YYYY-MM-DD，默认明天）
+    - preferred_time: 首选时间（格式：HH:MM，默认08:00）
     
-    重要：不要假装预约成功，必须调用此工具执行真实的预约操作。
-    预约结果会返回成功或失败的详细信息。
+    ⚠️ 严禁编造预约结果！
+    - 不要说"预约成功"除非此工具返回 success: true
+    - 不要假装已经预约，必须实际调用此工具
+    - 预约失败时必须如实告知用户失败原因
+    - 只有工具返回的结果才是真实的预约状态
     """
     if HenuLibraryBot is None:
         return {"success": False, "msg": "图书馆模块不可用"}
