@@ -272,6 +272,34 @@ class HenuLibraryBot:
         if raw_time is None:
             return ""
         text = str(raw_time).strip()
+        if not text:
+            return ""
+
+        match = re.search(r"(\d{1,2})[:：](\d{1,2})", text)
+        if match:
+            hour = int(match.group(1))
+            minute = int(match.group(2))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+
+        match = re.search(r"(\d{1,2})点(?:(\d{1,2})分?)?", text)
+        if match:
+            hour = int(match.group(1))
+            minute = int(match.group(2) or "0")
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+
+        compact = re.sub(r"\D", "", text)
+        if len(compact) in (3, 4):
+            if len(compact) == 3:
+                hour = int(compact[0])
+                minute = int(compact[1:])
+            else:
+                hour = int(compact[:2])
+                minute = int(compact[2:])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+
         match = re.search(r"(\d{2}:\d{2})", text)
         return match.group(1) if match else text
 
@@ -285,6 +313,12 @@ class HenuLibraryBot:
             return int(hour) * 60 + int(minute)
         except Exception:
             return None
+
+    @staticmethod
+    def _minutes_to_hhmm(value: int) -> str:
+        hour = max(0, value) // 60
+        minute = max(0, value) % 60
+        return f"{hour:02d}:{minute:02d}"
 
     @staticmethod
     def _normalize_seat_no(value: Any) -> str:
@@ -397,6 +431,8 @@ class HenuLibraryBot:
             raise RuntimeError(f"区域未返回 {target_date} 的开放时间")
 
         day = str(date_row.get("day") or target_date)
+        preferred_hhmm = self._to_hhmm(preferred_time or "")
+        preferred_min = self._time_to_minutes(preferred_hhmm) if preferred_hhmm else None
         seat_query = {
             "id": str(area_id),
             "day": day,
@@ -419,17 +455,27 @@ class HenuLibraryBot:
                 raise RuntimeError(f"{day} 未返回可预约时段")
             active_slots = [item for item in times if str(item.get("status", "1")) == "1"] or times
             first_slot = active_slots[0]
-            if preferred_time:
-                preferred_min = self._time_to_minutes(preferred_time)
-                if preferred_min is not None:
-                    for item in active_slots:
-                        start_min = self._time_to_minutes(item.get("start"))
-                        end_min = self._time_to_minutes(item.get("end"))
-                        if start_min is None or end_min is None:
-                            continue
+            if preferred_min is not None:
+                slot_rows: list[tuple[int, int, dict[str, Any]]] = []
+                for item in active_slots:
+                    start_min = self._time_to_minutes(item.get("start"))
+                    end_min = self._time_to_minutes(item.get("end"))
+                    if start_min is None or end_min is None:
+                        continue
+                    slot_rows.append((start_min, end_min, item))
+                if slot_rows:
+                    matched = None
+                    for start_min, end_min, item in slot_rows:
                         if start_min <= preferred_min <= end_min:
-                            first_slot = item
+                            matched = item
                             break
+                    if matched is None:
+                        later = [item for start_min, _, item in slot_rows if start_min >= preferred_min]
+                        if later:
+                            matched = later[0]
+                        else:
+                            matched = slot_rows[-1][2]
+                    first_slot = matched
             seat_query["start_time"] = self._to_hhmm(first_slot.get("start"))
             seat_query["end_time"] = self._to_hhmm(first_slot.get("end"))
             confirm_payload["segment"] = str(first_slot.get("id") or "")
@@ -440,27 +486,30 @@ class HenuLibraryBot:
             if not times:
                 raise RuntimeError(f"{day} 未返回可预约时点")
             time_value = times[0]
-            if preferred_time:
-                preferred_hhmm = self._to_hhmm(preferred_time)
+            if preferred_min is not None:
+                points: list[tuple[int, Any]] = []
                 for item in times:
                     if isinstance(item, dict):
-                        compare_hhmm = self._to_hhmm(
-                            item.get("time") or item.get("start") or item.get("end")
-                        )
+                        compare_hhmm = self._to_hhmm(item.get("time") or item.get("start") or item.get("end"))
                     else:
                         compare_hhmm = self._to_hhmm(item)
-                    if compare_hhmm == preferred_hhmm:
-                        time_value = item
-                        break
+                    point_min = self._time_to_minutes(compare_hhmm)
+                    if point_min is None:
+                        continue
+                    points.append((point_min, item))
+                if points:
+                    points.sort(key=lambda x: x[0])
+                    exact = [item for point_min, item in points if point_min == preferred_min]
+                    if exact:
+                        time_value = exact[0]
+                    else:
+                        later = [item for point_min, item in points if point_min >= preferred_min]
+                        time_value = later[0] if later else points[-1][1]
             if isinstance(time_value, dict):
-                time_value = (
-                    time_value.get("id")
-                    or time_value.get("time")
-                    or time_value.get("start")
-                    or time_value.get("end")
-                    or ""
-                )
+                time_value = time_value.get("time") or time_value.get("start") or time_value.get("end") or ""
             hhmm = self._to_hhmm(time_value)
+            if not hhmm:
+                raise RuntimeError("时点预约参数缺失")
             seat_query["start_time"] = hhmm
             seat_query["end_time"] = hhmm
             confirm_payload["end_time"] = hhmm
@@ -469,6 +518,15 @@ class HenuLibraryBot:
             end_time = self._to_hhmm(date_row.get("def_end_time") or date_row.get("end_time"))
             if not start_time or not end_time:
                 raise RuntimeError("预约时间参数缺失")
+            if preferred_min is not None:
+                start_min = self._time_to_minutes(start_time)
+                end_min = self._time_to_minutes(end_time)
+                if start_min is not None and end_min is not None:
+                    if preferred_min < start_min or preferred_min >= end_min:
+                        raise RuntimeError(
+                            f"期望时间 {preferred_hhmm} 不在可预约区间 {start_time}-{end_time}"
+                        )
+                    start_time = self._minutes_to_hhmm(preferred_min)
             seat_query["start_time"] = start_time
             seat_query["end_time"] = end_time
             confirm_payload["start_time"] = start_time
@@ -493,6 +551,9 @@ class HenuLibraryBot:
             "confirm_path": "/v4/space/confirm",
             "confirm_payload": confirm_payload,
             "confirm_crypto": True,
+            "reserve_type": reserve_type,
+            "space_type": space_type,
+            "preferred_time": preferred_hhmm,
         }
 
     def _query_seats(self, seat_query_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -638,6 +699,13 @@ class HenuLibraryBot:
             return {
                 "success": success,
                 "msg": self._resp_msg(confirm_resp),
+                "applied_time": {
+                    "preferred_time": plan.get("preferred_time", ""),
+                    "start_time": (plan.get("seat_query") or {}).get("start_time", ""),
+                    "end_time": (plan.get("seat_query") or {}).get("end_time", ""),
+                    "reserve_type": plan.get("reserve_type", ""),
+                    "space_type": plan.get("space_type", ""),
+                },
             }
         except Exception as exc:
             return {"success": False, "msg": f"预约流程异常: {exc}"}

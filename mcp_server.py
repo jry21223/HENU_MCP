@@ -1131,7 +1131,10 @@ def _library_reserve_impl(
     result = bot.reserve(target_location, target_seat, target_date, preferred_time=str(preferred_time or "08:00"))
     _save_library_cookies(bot.get_cookies())
     
-    return {"success": result.get("success"), "msg": result.get("msg", ""), "date": target_date}
+    response = {"success": result.get("success"), "msg": result.get("msg", ""), "date": target_date}
+    if isinstance(result, dict) and "applied_time" in result:
+        response["applied_time"] = result.get("applied_time")
+    return response
 
 
 def _library_records_impl(record_type: str = "1", page: int = 1, limit: int = 20) -> dict[str, Any]:
@@ -1198,6 +1201,11 @@ def setup_account(
     """
     【必须调用】初始化河大账号 - 这是使用其他功能的前提
     
+    【执行协议（必须遵守）】
+    1) 在给用户任何“已完成/已成功”结论前，必须先真实调用本工具并等待返回。
+    2) 回复时必须基于本次返回中的 success/msg/account 字段，不得凭空补全。
+    3) 若调用失败或未调用，必须明确说明未完成，禁止使用完成时态描述结果。
+    
     功能：
     1) 保存学号和密码到本地
     2) 验证登录河大教务系统
@@ -1238,6 +1246,11 @@ def sync_schedule(
     """
     【必须调用】同步课表 - 从教务系统获取真实课表数据
     
+    【执行协议（必须遵守）】
+    1) 禁止直接口述“已同步课表”，必须先调用此工具。
+    2) 回复中必须转述本次返回的 success/msg 与关键文件字段。
+    3) 如果工具失败，必须如实返回失败原因，不得伪造课表内容。
+    
     功能：从河大教务系统抓取课表并生成结构化数据
     
     重要：不要编造课表信息，必须调用此工具获取真实数据。
@@ -1264,6 +1277,11 @@ def library_locations() -> dict[str, Any]:
     """
     【必须调用】查看图书馆区域列表 - 获取所有可预约的图书馆区域
     
+    【执行协议（必须遵守）】
+    1) 预约前必须先调用本工具确认区域，不得凭记忆列举。
+    2) 回复时只允许使用本工具返回的 locations 列表。
+    3) 未调用或调用失败时，必须明确说明无法确认区域。
+    
     功能：返回图书馆所有区域的名称和ID
     返回格式：{"success": true, "locations": [{"location": "区域名", "area_id": "ID"}]}
     
@@ -1284,6 +1302,11 @@ def library_reserve(
 ) -> dict[str, Any]:
     """
     【必须调用】预约图书馆座位 - 执行真实的座位预约操作
+    
+    【执行协议（必须遵守）】
+    1) 禁止在未调用工具时说“已预约成功/已帮你预约”。
+    2) 回复必须包含本次返回的 success/msg/date（以及 applied_time 如有）。
+    3) 调用失败时必须原样转述失败原因，不得改写为成功。
     
     功能：向图书馆系统提交座位预约请求
     参数：
@@ -1311,6 +1334,11 @@ def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> d
     """
     【必须调用】查询图书馆预约记录 - 获取真实的预约历史
     
+    【执行协议（必须遵守）】
+    1) 禁止“猜你有预约记录”，必须先调用本工具。
+    2) 回复仅可基于本次 records 返回，不得编造记录项。
+    3) 失败时必须明确说明查询失败与原因。
+    
     功能：从图书馆系统查询预约记录
     record_type: 1(普通) / 3(研习) / 4(考研)
     
@@ -1323,6 +1351,11 @@ def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> d
 def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
     """
     【必须调用】取消图书馆预约 - 执行真实的取消操作
+    
+    【执行协议（必须遵守）】
+    1) 禁止在未调用本工具前说“已取消”。
+    2) 只可依据本次返回 success/msg 输出取消结果。
+    3) 失败时必须明确为“取消失败”，并附原始原因。
     
     功能：向图书馆系统提交取消预约请求
     record_type 支持 auto 自动识别
@@ -1339,6 +1372,10 @@ def current_course(
 ) -> dict[str, Any]:
     """
     获取“当前正在上的课 + 下一节课”。
+    
+    【执行协议（必须遵守）】
+    1) 禁止直接猜测当前课程，必须先调用本工具。
+    2) 回复必须基于本次返回中的 current_courses/next_course。
     """
     return _current_course_impl(timezone=timezone, auto_calibrate=auto_calibrate)
 
@@ -1347,6 +1384,10 @@ def current_course(
 def latest_schedule() -> dict[str, Any]:
     """
     【必须调用】获取完整课表 - 返回一周的所有课程安排
+    
+    【执行协议（必须遵守）】
+    1) 禁止凭历史记忆输出课表，必须调用本工具获取最新数据。
+    2) 回复时应以本次返回 schedule 为准，不得编造课程。
     
     功能：返回结构化的课表数据，按星期组织
     
@@ -1359,6 +1400,11 @@ def latest_schedule() -> dict[str, Any]:
 def latest_schedule_current_week(timezone: str = "Asia/Shanghai") -> dict[str, Any]:
     """
     【推荐使用】获取本周课表 - 只显示本周真正在上的课程
+    
+    【执行协议（必须遵守）】
+    1) 禁止不经调用就声称“这是你本周课表”。
+    2) 回复必须基于本次返回的 current_week 与 schedule。
+    3) 失败时必须明确说明无法获取本周课表。
     
     功能：
     - 自动计算当前周次（基于学期开始日期）
