@@ -104,18 +104,30 @@ def generate_config():
     base_dir = Path(__file__).parent.resolve()
     
     configs = {
-        "Cherry Studio (推荐)": {
+        "Cherry Studio - 方式1 (推荐)": {
+            "mcpServers": {
+                "henu-campus": {
+                    "command": "python3",
+                    "args": [
+                        str(base_dir / "mcp_server.py"),
+                        "--transport",
+                        "stdio"
+                    ]
+                }
+            }
+        },
+        "Cherry Studio - 方式2 (使用bash)": {
             "mcpServers": {
                 "henu-campus": {
                     "command": "bash",
                     "args": [
-                        "-lc",
+                        "-c",
                         f'cd "{base_dir}" && python3 mcp_server.py --transport stdio'
                     ]
                 }
             }
         },
-        "直接使用Python": {
+        "其他MCP客户端": {
             "mcpServers": {
                 "henu-campus": {
                     "command": "python3",
