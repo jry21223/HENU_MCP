@@ -1,6 +1,6 @@
 # 河大校园助手 - OpenClaw Skill版本
 
-这是一个为河南大学学生设计的OpenClaw skill，提供教务系统课表查询和图书馆座位预约功能。
+这是一个为河南大学学生设计的 OpenClaw skill，提供与 `mcp-server` 分支同等能力的课表查询和图书馆座位预约功能。
 
 ## 项目分支说明
 
@@ -11,6 +11,8 @@
 ## 功能特性
 
 - 🎓 **智能课表**: 查询个人课表、当前课程、下一节课信息
+- 📅 **本周课表过滤**: 支持按当前周次过滤课程
+- ⏰ **节次自动校准**: 支持喜鹊抓包参数配置与自动校准
 - 📚 **图书馆服务**: 预约座位、查询预约记录、取消预约
 - 🔐 **安全存储**: 账号信息本地加密存储，不会上传
 - 💬 **自然交互**: 支持自然语言对话，无需记忆命令
@@ -71,8 +73,13 @@ pip3 install -r requirements.txt
 openclaw-skill/
 ├── SKILL.md              # OpenClaw skill定义
 ├── henu_cli.py          # 命令行接口
+├── mcp_server.py        # 与mcp分支对齐的核心实现
+├── course_schedule.py   # 课表抓取
+├── schedule_cleaner.py  # 课表清洗
+├── library_core/
+│   └── henu_core.py     # 图书馆核心（内置）
 ├── scripts/
-│   └── henu_campus_mcp.py # 核心功能模块
+│   └── henu_campus_mcp.py # Skill调用包装层
 ├── requirements.txt      # Python依赖
 ├── README.md            # 本文档
 └── MIGRATION.md         # 迁移说明
@@ -80,9 +87,9 @@ openclaw-skill/
 
 ## 技术特点
 
-- **零配置**: 无需复杂的MCP服务器配置
-- **轻量级**: 移除了MCP框架依赖
-- **兼容性**: 保持与原MCP版本的功能兼容
+- **零配置**: 无需单独部署MCP服务进程
+- **能力对齐**: 与 `mcp-server` 分支工具行为一致
+- **内置图书馆核心**: 不依赖外部 `../图书馆自动预约/web`
 - **可扩展**: 易于添加新功能和改进
 
 ## 故障排除
@@ -94,8 +101,8 @@ openclaw-skill/
    - 确认河大CAS系统正常运行
 
 2. **图书馆功能不可用**
-   - 图书馆模块为可选功能
-   - 检查是否有library_core依赖
+   - 检查 `library_core/henu_core.py` 是否存在
+   - 检查依赖是否已安装
 
 3. **课表解析失败**
    - 可能是教务系统页面结构变更
