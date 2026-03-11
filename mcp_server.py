@@ -29,18 +29,8 @@ BASE_DIR = Path(__file__).resolve().parent
 PERIOD_TIME_FILE = BASE_DIR / "period_time_config.json"
 PERIOD_CALIBRATION_STATE_FILE = BASE_DIR / "period_time_calibration_state.json"
 XIQUEER_REQUEST_FILE = BASE_DIR / "xiqueer_period_time_request.json"
-
-# 图书馆核心模块路径 - 支持多种可能的位置
-LIBRARY_CORE_CANDIDATES = [
-    BASE_DIR / "library_core",  # 同级目录
-    BASE_DIR.parent / "图书馆自动预约" / "web",  # 原始位置
-    BASE_DIR.parent / "library_core",  # 父级目录
-]
-LIBRARY_CORE_DIR = None
-for candidate in LIBRARY_CORE_CANDIDATES:
-    if candidate.exists() and (candidate / "henu_core.py").exists():
-        LIBRARY_CORE_DIR = candidate
-        break
+LIBRARY_CORE_EXPECTED_FILE = BASE_DIR / "library_core" / "henu_core.py"
+LIBRARY_CORE_DIR = LIBRARY_CORE_EXPECTED_FILE.parent if LIBRARY_CORE_EXPECTED_FILE.exists() else None
 
 LIBRARY_COOKIE_FILE = BASE_DIR / "henu_library_cookies.json"
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -728,7 +718,7 @@ def _save_library_cookies(cookies: dict[str, Any]) -> None:
 
 def _build_library_bot(student_id: str, password: str):
     if HenuLibraryBot is None:
-        raise RuntimeError(f"图书馆核心模块不可用: {LIBRARY_CORE_DIR}/henu_core.py")
+        raise RuntimeError(f"图书馆核心模块不可用: {LIBRARY_CORE_EXPECTED_FILE}")
 
     stored = _load_library_cookies()
     bot = HenuLibraryBot(student_id, password, stored or None)  # type: ignore
@@ -1094,7 +1084,7 @@ def library_locations() -> dict[str, Any]:
     重要：不要编造区域信息，必须调用此工具获取准确的区域列表。
     """
     if HenuLibraryBot is None:
-        return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_DIR}/henu_core.py", "locations": []}
+        return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_EXPECTED_FILE}", "locations": []}
     return {"success": True, "locations": [
         {"location": name, "area_id": str(area_id)} 
         for name, area_id in HenuLibraryBot.LOCATIONS.items()
@@ -1290,7 +1280,7 @@ def library_locations() -> dict[str, Any]:
     - 预约前必须先调用此工具确认可用区域
     """
     if HenuLibraryBot is None:
-        return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_DIR}/henu_core.py", "locations": []}
+        return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_EXPECTED_FILE}", "locations": []}
     return {"success": True, "locations": [
         {"location": name, "area_id": str(area_id)} 
         for name, area_id in HenuLibraryBot.LOCATIONS.items()

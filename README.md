@@ -68,8 +68,7 @@ python3 diagnose_mcp.py
 
 ### LangBot
 
-在 MCP 管理页新增一个 `stdio` 服务，命令与参数可直接复用上面的 `bash -lc ...`。  
-详细步骤见 [LANGBOT_CONFIG.md](LANGBOT_CONFIG.md)。
+在 MCP 管理页新增一个 `stdio` 服务，命令与参数可直接复用上面的 `bash -lc ...`。
 
 ## 常用工具
 
@@ -90,11 +89,10 @@ python3 diagnose_mcp.py
 ## 关键文件
 
 - 服务入口：`mcp_server.py`
+- 图书馆核心：`library_core/henu_core.py`
 - 安装脚本：`install.sh`
 - 启动脚本：`run.sh`
 - 依赖清单：`requirements.txt`
-- 工具说明：`TOOL_USAGE_GUIDE.md`
-- 周次过滤说明：`WEEK_FILTER_GUIDE.md`
 
 ## 常见问题
 
@@ -106,3 +104,4 @@ python3 diagnose_mcp.py
 
 - 账号与 Cookie 默认保存在本地（如 `henu_profile.json`、`henu_cookies.json`、`henu_library_cookies.json`）
 - 项目不会主动上传你的账号数据到第三方服务器
+- 图书馆预约核心已内置在 `library_core/henu_core.py`，不依赖外部目录
