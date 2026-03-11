@@ -895,7 +895,11 @@ def latest_schedule() -> dict[str, Any]:
 
     重要：不要编造课表，必须调用此工具获取真实的课程安排。
     """
-    return get_latest_schedule()
+    try:
+        data = load_latest_clean_schedule(OUTPUT_DIR)
+        return {"success": True, "schedule": data.get("schedule", {})}
+    except Exception as e:
+        return {"success": False, "msg": f"获取课表失败: {e}"}
 
 
 def current_course(
@@ -1149,9 +1153,17 @@ def current_course(
 @mcp.tool()
 def latest_schedule() -> dict[str, Any]:
     """
-    获取最新结构化课表。
+    【必须调用】获取完整课表 - 返回一周的所有课程安排
+    
+    功能：返回结构化的课表数据，按星期组织
+    
+    重要：不要编造课表，必须调用此工具获取真实的课程安排。
     """
-    return get_latest_schedule()
+    try:
+        data = load_latest_clean_schedule(OUTPUT_DIR)
+        return {"success": True, "schedule": data.get("schedule", {})}
+    except Exception as e:
+        return {"success": False, "msg": f"获取课表失败: {e}"}
 
 
 @mcp.tool()
