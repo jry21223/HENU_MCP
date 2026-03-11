@@ -379,6 +379,47 @@ class HenuXkClient:
             deduped.append((label, url))
         return deduped
 
+    def build_direct_student_schedule_data_urls(
+        self,
+        xn: str,
+        xq: str,
+        xh: str,
+    ) -> list[tuple[str, str]]:
+        raw_params = f"xn={xn}&xq={xq}&xh={xh}"
+        encoded_params = base64.b64encode(raw_params.encode("utf-8")).decode("ascii")
+        plain_params = [raw_params, f"xnm={xn}&xqm={xq}&xh={xh}"]
+
+        list_paths = [
+            "/wsxk/xkjg.ckdgxsxdkchj_data10319.jsp",
+            "/wsxk/xkjg.ckdgxsxdkchj_data.jsp",
+        ]
+        grid_paths = [
+            "/student/wsxk.xskcb10319.jsp",
+            "/student/wsxk.xskcb.jsp",
+        ]
+
+        candidates: list[tuple[str, str]] = []
+        for path in list_paths:
+            abs_url = urljoin(f"{self.base_url}/", path)
+            candidates.append(("list", f"{abs_url}?params={encoded_params}"))
+            for query in plain_params:
+                candidates.append(("list", f"{abs_url}?{query}"))
+
+        for path in grid_paths:
+            abs_url = urljoin(f"{self.base_url}/", path)
+            candidates.append(("grid", f"{abs_url}?params={encoded_params}"))
+            for query in plain_params:
+                candidates.append(("grid", f"{abs_url}?{query}"))
+
+        deduped: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for label, url in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append((label, url))
+        return deduped
+
 def prompt_text(label: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
     value = input(f"{label}{suffix}: ").strip()
@@ -410,6 +451,10 @@ def _is_useful_schedule_page(page: dict[str, Any]) -> bool:
     if any(keyword in title_lower for keyword in ("课表", "排课", "timetable", "kb", "课程表")):
         return True
     if any(keyword in text for keyword in ("课表", "课程", "星期", "周一", "周二", "学年学期")):
+        return True
+    if re.search(r"\d+\s*-\s*\d+周\s*[一二三四五六日天]\[\d", text):
+        return True
+    if "id='mytable'" in text or 'id="mytable"' in text:
         return True
     return False
 
@@ -477,6 +522,16 @@ def run_fetch(
         user_type = str(context.get("user_type", "") or "").upper()
 
         if user_type == "STU":
+            target_xn = str(xn or context.get("current_xn") or "").strip()
+            target_xq = str(xq or context.get("current_xq") or "").strip()
+            target_xh = str(
+                context.get("user_code")
+                or context.get("login_id")
+                or student_id
+                or ""
+            ).strip()
+            data_urls: list[tuple[str, str]] = []
+
             schedule_entry = client.fetch_page(
                 urljoin(f"{client.base_url}/", "student/xkjg.wdkb.jsp"),
                 referer=home_result["final_url"],
@@ -488,50 +543,67 @@ def run_fetch(
                 generated_files["schedule_entry_file"] = entry_file
 
                 entry_xn, entry_xq = client._extract_student_term(schedule_entry["text"])
-                target_xn = str(xn or context.get("current_xn") or entry_xn or "").strip()
-                target_xq = str(xq or context.get("current_xq") or entry_xq or "").strip()
-                fallback_xh = str(
-                    context.get("user_code")
-                    or context.get("login_id")
-                    or student_id
-                    or ""
-                ).strip()
-                target_xh = client._extract_student_xh(schedule_entry["text"], fallback_xh)
+                if not target_xn and entry_xn:
+                    target_xn = str(entry_xn).strip()
+                if not target_xq and entry_xq:
+                    target_xq = str(entry_xq).strip()
+                target_xh = client._extract_student_xh(schedule_entry["text"], target_xh)
 
                 if target_xn and target_xq and target_xh:
-                    data_urls = client.build_student_schedule_data_urls(
-                        schedule_page_url=schedule_entry["final_url"],
-                        schedule_page_html=schedule_entry["text"],
+                    data_urls.extend(
+                        client.build_student_schedule_data_urls(
+                            schedule_page_url=schedule_entry["final_url"],
+                            schedule_page_html=schedule_entry["text"],
+                            xn=target_xn,
+                            xq=target_xq,
+                            xh=target_xh,
+                        )
+                    )
+
+            if target_xn and target_xq and target_xh:
+                data_urls.extend(
+                    client.build_direct_student_schedule_data_urls(
                         xn=target_xn,
                         xq=target_xq,
                         xh=target_xh,
                     )
+                )
 
-                    student_data_pages: dict[str, dict[str, Any]] = {}
-                    # 先尝试二维表，再尝试列表
-                    data_urls = sorted(data_urls, key=lambda item: 0 if item[0] == "grid" else 1)
+            if data_urls:
+                deduped_urls: list[tuple[str, str]] = []
+                seen_urls: set[str] = set()
+                for label, data_url in data_urls:
+                    if data_url in seen_urls:
+                        continue
+                    seen_urls.add(data_url)
+                    deduped_urls.append((label, data_url))
 
-                    for label, data_url in data_urls:
-                        page = client.fetch_page(data_url, referer=schedule_entry["final_url"])
-                        _record(page, f"student_schedule_data_{label}")
-                        student_data_pages[label] = page
+                student_data_pages: dict[str, dict[str, Any]] = {}
+                # 优先尝试新版列表接口，失败后再尝试二维表
+                deduped_urls = sorted(deduped_urls, key=lambda item: 0 if item[0] == "list" else 1)
 
-                        if _is_useful_schedule_page(page):
+                referer_url = schedule_entry["final_url"] if schedule_entry else home_result["final_url"]
+                for label, data_url in deduped_urls:
+                    page = client.fetch_page(data_url, referer=referer_url)
+                    _record(page, f"student_schedule_data_{label}")
+                    student_data_pages[label] = page
+
+                    if _is_useful_schedule_page(page):
+                        chosen = page
+                        generated_files[f"schedule_{label}_file"] = _save_output_file(
+                            f"schedule_{label}", timestamp, page["text"], "html"
+                        )
+                        break
+
+                if chosen is None:
+                    for label in ("list", "grid"):
+                        page = student_data_pages.get(label)
+                        if page and not page["invalid_auth"] and not page["invalid_request"]:
                             chosen = page
                             generated_files[f"schedule_{label}_file"] = _save_output_file(
                                 f"schedule_{label}", timestamp, page["text"], "html"
                             )
                             break
-
-                    if chosen is None:
-                        for label in ("grid", "list"):
-                            page = student_data_pages.get(label)
-                            if page and not page["invalid_auth"] and not page["invalid_request"]:
-                                chosen = page
-                                generated_files[f"schedule_{label}_file"] = _save_output_file(
-                                    f"schedule_{label}", timestamp, page["text"], "html"
-                                )
-                                break
 
         if chosen is None:
             urls = client.discover_schedule_urls(home_result["text"], user_type=str(context.get("user_type", "")))

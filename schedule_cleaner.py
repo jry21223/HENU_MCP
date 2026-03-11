@@ -13,6 +13,16 @@ WEEKDAY_ORDER = ["星期一", "星期二", "星期三", "星期四", "星期五"
 SLOT_FALLBACK = {"一": "第1-2节", "二": "第3-4节", "三": "第6-7节", "四": "第9-10节", "五": "第11-12节"}
 SLOT_ORDER = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
 SECTION_MAP = {"上午": "上午", "下午": "下午", "晚上": "晚上"}
+WEEKDAY_CHAR_MAP = {
+    "一": "星期一",
+    "二": "星期二",
+    "三": "星期三",
+    "四": "星期四",
+    "五": "星期五",
+    "六": "星期六",
+    "日": "星期日",
+    "天": "星期日",
+}
 
 
 def _norm(text: str) -> str:
@@ -59,8 +69,15 @@ def _period_from_slot(slot_key: str, week_time: str) -> str:
     return SLOT_FALLBACK.get(slot_key, "")
 
 
-def parse_schedule_grid_html(html_text: str) -> dict[str, Any]:
-    doc = html.fromstring(html_text)
+def _period_sort_key(item: dict[str, str]) -> int:
+    period = str(item.get("period", ""))
+    match = re.search(r"第(\d+)", period)
+    if match:
+        return int(match.group(1))
+    return 99
+
+
+def _parse_schedule_grid_doc(doc: html.HtmlElement) -> dict[str, Any]:
     tables = doc.xpath("//table[@id='mytable']")
     if not tables:
         raise ValueError("未找到课表主表格(id=mytable)")
@@ -142,6 +159,115 @@ def parse_schedule_grid_html(html_text: str) -> dict[str, Any]:
     }
 
 
+def _pick_course_name(cells: list[str]) -> str:
+    for idx in (2, 1, 3):
+        if idx < len(cells):
+            candidate = re.sub(r"\[.*?\]", "", cells[idx]).strip()
+            if candidate and not re.fullmatch(r"\d+", candidate):
+                return candidate
+    for cell in cells:
+        candidate = re.sub(r"\[.*?\]", "", cell).strip()
+        if not candidate or re.fullmatch(r"\d+", candidate):
+            continue
+        if re.search(r"(?:^|\s)周?\s*[一二三四五六日天]\[\d", candidate):
+            continue
+        return candidate
+    return "未命名课程"
+
+
+def _pick_teacher_name(cells: list[str]) -> str:
+    for idx in (6, 5, 7):
+        if idx < len(cells):
+            candidate = re.sub(r"\[.*?\]", "", cells[idx]).strip()
+            if candidate and not re.fullmatch(r"\d+", candidate):
+                return candidate
+    return ""
+
+
+def _pick_time_location(cells: list[str]) -> str:
+    for idx in (10, len(cells) - 1):
+        if 0 <= idx < len(cells):
+            candidate = cells[idx].strip()
+            if candidate and re.search(r"[一二三四五六日天]\[\d", candidate):
+                return candidate
+    for cell in cells:
+        if re.search(r"[一二三四五六日天]\[\d", cell):
+            return cell.strip()
+    return ""
+
+
+def _parse_schedule_list_doc(doc: html.HtmlElement) -> dict[str, Any]:
+    rows = doc.xpath("//tbody/tr")
+    if not rows:
+        raise ValueError("未找到课程列表数据")
+
+    schedule: dict[str, list[dict[str, str]]] = {day: [] for day in WEEKDAY_ORDER}
+    parsed_count = 0
+
+    for row in rows:
+        cells = [_norm("".join(td.xpath(".//text()"))) for td in row.xpath("./td")]
+        if len(cells) < 4:
+            continue
+
+        time_location = _pick_time_location(cells)
+        if not time_location:
+            continue
+
+        course = _pick_course_name(cells)
+        teacher = _pick_teacher_name(cells)
+        parts = [segment.strip() for segment in re.split(r"[；;]", time_location) if segment.strip()]
+
+        for part in parts:
+            match = re.search(r"(?:^|\s)(?:周\s*)?([一二三四五六日天])\[(\d+(?:-\d+)?)\]", part)
+            if not match:
+                continue
+
+            day_cn = WEEKDAY_CHAR_MAP.get(match.group(1), "")
+            if day_cn not in schedule:
+                continue
+
+            period_raw = match.group(2)
+            location = ""
+            if "]" in part:
+                location = part.split("]", 1)[1].strip()
+                location = re.sub(r"^\d+(?:-\d+)?周\s*", "", location).strip()
+                location = location.lstrip("，,、 ")
+            if not location:
+                location = "未标注"
+
+            schedule[day_cn].append(
+                {
+                    "section": "",
+                    "period": f"第{period_raw}节",
+                    "period_key": period_raw.split("-", 1)[0],
+                    "course": course,
+                    "teacher": teacher,
+                    "time": part,
+                    "location": location,
+                }
+            )
+            parsed_count += 1
+
+    if parsed_count == 0:
+        raise ValueError("课程列表中未解析到可用课程数据")
+
+    for day in WEEKDAY_ORDER:
+        schedule[day].sort(key=_period_sort_key)
+
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "meta": _extract_meta(doc),
+        "schedule": schedule,
+    }
+
+
+def parse_schedule_grid_html(html_text: str) -> dict[str, Any]:
+    doc = html.fromstring(html_text)
+    if doc.xpath("//table[@id='mytable']"):
+        return _parse_schedule_grid_doc(doc)
+    return _parse_schedule_list_doc(doc)
+
+
 def render_schedule_markdown(schedule_data: dict[str, Any]) -> str:
     meta = schedule_data.get("meta") or {}
     schedule = schedule_data.get("schedule") or {}
@@ -163,7 +289,12 @@ def render_schedule_markdown(schedule_data: dict[str, Any]) -> str:
             lines.append("- 当天无课程安排。")
             continue
         for item in day_items:
-            lines.append(f"- {item.get('section', '')}（{item.get('period', '')}）")
+            section = str(item.get("section", "")).strip()
+            period = str(item.get("period", "")).strip()
+            if section:
+                lines.append(f"- {section}（{period}）")
+            else:
+                lines.append(f"- {period}")
             lines.append(f"  - 课程：{item.get('course', '')}")
             lines.append(f"  - 老师：{item.get('teacher', '')}")
             lines.append(f"  - 时间：{item.get('time', '')}")
