@@ -167,6 +167,7 @@ class HenuXkClient:
         text = result["text"]
 
         login_id = self._extract_var(text, "_loginid") or self._extract_var(text, "G_LOGIN_ID")
+        user_code = self._extract_var(text, "_userCode") or self._extract_var(text, "G_USER_CODE")
         user_type = self._extract_var(text, "_usertype") or self._extract_var(text, "G_USER_TYPE")
         current_xn = self._extract_var(text, "_currentXn")
         current_xq = self._extract_var(text, "_currentXq")
@@ -178,6 +179,7 @@ class HenuXkClient:
         return {
             "authenticated": authenticated,
             "login_id": login_id,
+            "user_code": user_code,
             "user_type": user_type,
             "current_xn": current_xn,
             "current_xq": current_xq,
@@ -281,19 +283,68 @@ class HenuXkClient:
 
     @staticmethod
     def _extract_student_xh(schedule_page_html: str, fallback: str) -> str:
-        match = re.search(r'id="xh"[^>]*value="(.*?)"', schedule_page_html)
-        if match and match.group(1).strip():
-            return match.group(1).strip()
+        patterns = [
+            r'id=["\']xh["\'][^>]*value=["\'](.*?)["\']',
+            r'name=["\']xh["\'][^>]*value=["\'](.*?)["\']',
+            r'value=["\'](.*?)["\'][^>]*id=["\']xh["\']',
+            r'value=["\'](.*?)["\'][^>]*name=["\']xh["\']',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, schedule_page_html, re.I)
+            if match and match.group(1).strip():
+                return match.group(1).strip()
         return fallback
+
+    @staticmethod
+    def _extract_student_term(schedule_page_html: str) -> tuple[str, str]:
+        def _pick(field: str) -> str:
+            patterns = [
+                rf'id=["\']{field}["\'][^>]*value=["\'](.*?)["\']',
+                rf'name=["\']{field}["\'][^>]*value=["\'](.*?)["\']',
+                rf'value=["\'](.*?)["\'][^>]*id=["\']{field}["\']',
+                rf'value=["\'](.*?)["\'][^>]*name=["\']{field}["\']',
+            ]
+            for pattern in patterns:
+                m = re.search(pattern, schedule_page_html, re.I)
+                if m and m.group(1).strip():
+                    return m.group(1).strip()
+            return ""
+
+        xn = _pick("xn")
+        xq = _pick("xq") or _pick("xq_m")
+        return xn, xq
 
     @staticmethod
     def _extract_student_data_paths(schedule_page_html: str) -> tuple[str, str]:
         default_list = "../wsxk/xkjg.ckdgxsxdkchj_data10319.jsp"
         default_grid = "../student/wsxk.xskcb10319.jsp"
-        m = re.search(r'frmaction\s*=\s*\$\("cxfs_lb"\)\.checked\?"([^"]+)":"([^"]+)"', schedule_page_html)
-        if not m:
-            return default_list, default_grid
-        return m.group(1), m.group(2)
+        patterns = [
+            r"""frmaction\s*=\s*\$\(["']cxfs_lb["']\)\.checked\s*\?\s*["']([^"']+)["']\s*:\s*["']([^"']+)["']""",
+            r"""frmaction\s*=\s*[^;]*\?\s*["']([^"']+)["']\s*:\s*["']([^"']+)["']""",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, schedule_page_html, re.I)
+            if m:
+                return m.group(1), m.group(2)
+
+        jsp_paths = re.findall(r"""["']([^"']+\.jsp)["']""", schedule_page_html, re.I)
+        list_path = ""
+        grid_path = ""
+        for path in jsp_paths:
+            lower = path.lower()
+            if not list_path and ("ckdgxsxdkchj_data" in lower or ("xkjg" in lower and "data" in lower)):
+                list_path = path
+            if (
+                not grid_path
+                and "xskcb" in lower
+                and "excel" not in lower
+                and "_exp" not in lower
+            ):
+                grid_path = path
+            if list_path and grid_path:
+                break
+
+        return list_path or default_list, grid_path or default_grid
 
     def build_student_schedule_data_urls(
         self,
@@ -309,11 +360,24 @@ class HenuXkClient:
 
         list_url = urljoin(schedule_page_url, list_path)
         grid_url = urljoin(schedule_page_url, grid_path)
+        plain_params = [raw_params, f"xnm={xn}&xqm={xq}&xh={xh}"]
 
-        return [
+        candidates: list[tuple[str, str]] = [
             ("list", f"{list_url}?params={encoded_params}"),
             ("grid", f"{grid_url}?params={encoded_params}"),
         ]
+        for query in plain_params:
+            candidates.append(("list", f"{list_url}?{query}"))
+            candidates.append(("grid", f"{grid_url}?{query}"))
+
+        deduped: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for label, url in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append((label, url))
+        return deduped
 
 def prompt_text(label: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
@@ -423,9 +487,16 @@ def run_fetch(
                 entry_file = _save_output_file("schedule_entry", timestamp, schedule_entry["text"], "html")
                 generated_files["schedule_entry_file"] = entry_file
 
-                target_xn = str(xn or context.get("current_xn") or "").strip()
-                target_xq = str(xq or context.get("current_xq") or "").strip()
-                target_xh = client._extract_student_xh(schedule_entry["text"], context.get("login_id", ""))
+                entry_xn, entry_xq = client._extract_student_term(schedule_entry["text"])
+                target_xn = str(xn or context.get("current_xn") or entry_xn or "").strip()
+                target_xq = str(xq or context.get("current_xq") or entry_xq or "").strip()
+                fallback_xh = str(
+                    context.get("user_code")
+                    or context.get("login_id")
+                    or student_id
+                    or ""
+                ).strip()
+                target_xh = client._extract_student_xh(schedule_entry["text"], fallback_xh)
 
                 if target_xn and target_xq and target_xh:
                     data_urls = client.build_student_schedule_data_urls(
