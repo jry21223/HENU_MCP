@@ -36,29 +36,27 @@ PERIOD_CALIBRATION_STATE_FILE = BASE_DIR / "period_time_calibration_state.json"
 XIQUEER_REQUEST_FILE = BASE_DIR / "xiqueer_period_time_request.json"
 
 # ===== 图书馆核心模块查找 =====
+LIBRARY_CORE_CANDIDATES = [
+    BASE_DIR / "library_core",                          # skill/library_core/
+    BASE_DIR.parent / "library_core",                   # 主项目同级 library_core/
+    BASE_DIR.parent / "图书馆自动预约" / "web",          # 原项目结构
+    BASE_DIR.parent.parent / "图书馆自动预约" / "web",   # 上两级
+    Path.home() / ".config" / "henu" / "library_core",  # 全局配置
+]
 LIBRARY_CORE_DIR = None
-if os.environ.get("HENU_LIBRARY_CORE"):
-    LIBRARY_CORE_DIR = Path(os.environ["HENU_LIBRARY_CORE"])
-else:
-    candidates = [
-        BASE_DIR / "library_core",                          # skill/library_core/
-        BASE_DIR.parent / "library_core",                   # 主项目同级 library_core/
-        BASE_DIR.parent / "图书馆自动预约" / "web",          # 原项目结构
-        BASE_DIR.parent.parent / "图书馆自动预约" / "web",   # 上两级
-        Path.home() / ".config" / "henu" / "library_core",  # 全局配置
-    ]
-    for candidate in candidates:
-        if candidate.exists() and (candidate / "henu_core.py").exists():
-            LIBRARY_CORE_DIR = candidate
-            break
+for candidate in LIBRARY_CORE_CANDIDATES:
+    if candidate.exists() and (candidate / "henu_core.py").exists():
+        LIBRARY_CORE_DIR = candidate
+        break
 
+# 尝试导入图书馆模块
+HenuLibraryBot = None
 if LIBRARY_CORE_DIR and str(LIBRARY_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(LIBRARY_CORE_DIR))
-
-try:
-    from henu_core import HenuLibraryBot  # type: ignore
-except Exception:
-    HenuLibraryBot = None  # type: ignore
+    try:
+        from henu_core import HenuLibraryBot  # type: ignore
+    except Exception:
+        pass
 
 # ===== 常量定义 =====
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -68,14 +66,17 @@ DEFAULT_PERIOD_TIMES: dict[str, dict[str, str]] = {
     "2": {"start": "08:55", "end": "09:40"},
     "3": {"start": "10:00", "end": "10:45"},
     "4": {"start": "10:55", "end": "11:40"},
-    "5": {"start": "11:50", "end": "12:35"},
-    "6": {"start": "14:30", "end": "15:15"},
-    "7": {"start": "15:25", "end": "16:10"},
-    "8": {"start": "16:20", "end": "17:05"},
-    "9": {"start": "17:15", "end": "18:00"},
-    "10": {"start": "18:10", "end": "18:55"},
-    "11": {"start": "19:00", "end": "19:45"},
-    "12": {"start": "19:55", "end": "20:40"},
+    "5": {"start": "11:45", "end": "12:30"},
+    "6": {"start": "13:00", "end": "13:30"},
+    "7": {"start": "13:30", "end": "14:00"},
+    "8": {"start": "14:05", "end": "14:50"},
+    "9": {"start": "15:00", "end": "15:45"},
+    "10": {"start": "15:55", "end": "16:40"},
+    "11": {"start": "17:00", "end": "17:45"},
+    "12": {"start": "17:55", "end": "18:40"},
+    "13": {"start": "19:10", "end": "19:55"},
+    "14": {"start": "20:05", "end": "20:50"},
+    "15": {"start": "20:55", "end": "21:40"},
 }
 
 # ===== 工具函数 =====
