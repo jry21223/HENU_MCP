@@ -35,14 +35,22 @@ pip install -r requirements.txt
       "command": "bash",
       "args": [
         "-lc",
-        "cd \"/Users/jerry/HENU_MCP\" && python3 mcp_server.py --transport stdio"
+        "cd \"<YOUR_PROJECT_PATH>\" && python3 mcp_server.py --transport stdio"
       ]
     }
   }
 }
 ```
 
-**注意**: 请将路径 `/Users/jerry/HENU_MCP` 替换为你实际的项目路径。
+**注意**: 请将 `<YOUR_PROJECT_PATH>` 替换为你实际的项目路径。
+
+**获取项目路径**：
+```bash
+cd /path/to/your/HENU_MCP
+git checkout mcp-server
+pwd
+# 复制输出的路径
+```
 
 #### 其他MCP客户端配置
 
@@ -52,7 +60,7 @@ pip install -r requirements.txt
   "mcpServers": {
     "henu-campus": {
       "command": "uvx",
-      "args": ["-y", "python", "/Users/jerry/HENU_MCP/mcp_server.py"],
+      "args": ["-y", "python", "<YOUR_PROJECT_PATH>/mcp_server.py"],
       "transport": "stdio"
     }
   }
@@ -65,7 +73,7 @@ pip install -r requirements.txt
   "mcpServers": {
     "henu-campus": {
       "command": "python3",
-      "args": ["/Users/jerry/HENU_MCP/mcp_server.py"],
+      "args": ["<YOUR_PROJECT_PATH>/mcp_server.py"],
       "transport": "stdio"
     }
   }

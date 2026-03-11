@@ -38,7 +38,7 @@
   "mcpServers": {
     "henu-campus": {
       "command": "uvx",
-      "args": ["-y", "python", "/Users/你的用户名/HENU_MCP/mcp_server.py"],
+      "args": ["-y", "python", "<YOUR_PROJECT_PATH>/mcp_server.py"],
       "transport": "stdio"
     }
   }
@@ -51,7 +51,7 @@
   "mcpServers": {
     "henu-campus": {
       "command": "npx",
-      "args": ["-y", "python3", "/Users/你的用户名/HENU_MCP/mcp_server.py"],
+      "args": ["-y", "python3", "<YOUR_PROJECT_PATH>/mcp_server.py"],
       "transport": "stdio"
     }
   }
@@ -64,7 +64,7 @@
   "mcpServers": {
     "henu-campus": {
       "command": "python3",
-      "args": ["/Users/你的用户名/HENU_MCP/mcp_server.py"],
+      "args": ["<YOUR_PROJECT_PATH>/mcp_server.py"],
       "transport": "stdio"
     }
   }
@@ -77,7 +77,7 @@
 ```bash
 cd /path/to/your/HENU_MCP
 pwd
-# 输出：/Users/jerry/HENU_MCP
+# 输出：<YOUR_PROJECT_PATH>
 ```
 
 ### 方法2：使用Python
@@ -88,7 +88,7 @@ python3 -c "import os; print(os.path.abspath('mcp_server.py'))"
 
 ### 方法3：使用ls命令验证
 ```bash
-ls -la /Users/你的用户名/HENU_MCP/mcp_server.py
+ls -la <YOUR_PROJECT_PATH>/mcp_server.py
 # 如果文件存在，会显示文件信息
 ```
 
