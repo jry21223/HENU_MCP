@@ -1279,11 +1279,18 @@ def sync_schedule(
 @mcp.tool()
 def library_locations() -> dict[str, Any]:
     """
-    查看图书馆可预约区域列表。
+    【必须调用】查看图书馆区域列表 - 获取所有可预约的图书馆区域
+    
+    功能：返回图书馆所有区域的名称和ID
+    
+    重要：不要编造区域信息，必须调用此工具获取准确的区域列表。
     """
     if HenuLibraryBot is None:
         return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_DIR}/henu_core.py", "locations": []}
-    return {"success": True, "locations": _library_locations()}
+    return {"success": True, "locations": [
+        {"location": name, "area_id": str(area_id)} 
+        for name, area_id in HenuLibraryBot.LOCATIONS.items()
+    ]}
 
 
 @mcp.tool()
@@ -1292,36 +1299,102 @@ def library_reserve(
     seat_no: str = "",
     target_date: str = "",
     preferred_time: str = "08:00",
-    save_as_default: bool = True,
 ) -> dict[str, Any]:
     """
-    预约图书馆座位（默认用 setup_account 保存的图书馆区域/座位）。
+    【必须调用】预约图书馆座位 - 执行真实的座位预约操作
+    
+    功能：向图书馆系统提交座位预约请求
+    
+    重要：不要假装预约成功，必须调用此工具执行真实的预约操作。
+    预约结果会返回成功或失败的详细信息。
     """
-    date_text = str(target_date).strip() or None
-    pref = str(preferred_time).strip() or None
-    return _library_reserve(
-        location=location,
-        seat_no=seat_no,
-        target_date=date_text,
-        preferred_time=pref,
-        save_as_default=save_as_default,
-    )
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用"}
+    
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号"}
+    
+    # 使用默认值
+    target_location = str(location or profile.get("library_location", "")).strip()
+    target_seat = str(seat_no or profile.get("library_seat_no", "")).strip()
+    
+    if not target_location or not target_seat:
+        return {"success": False, "msg": "请提供 location/seat_no 或在 setup_account 中设置默认值"}
+    
+    # 日期默认为明天
+    if not target_date:
+        target_date = (_now_dt().date() + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # 构建 bot 并预约
+    stored = load_json(LIBRARY_COOKIE_FILE)
+    bot = HenuLibraryBot(sid, pwd, stored or None)
+    
+    if not bot.login():
+        return {"success": False, "msg": "图书馆登录失败"}
+    
+    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    result = bot.reserve(target_location, target_seat, target_date, preferred_time=str(preferred_time or "08:00"))
+    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    
+    return {"success": result.get("success"), "msg": result.get("msg", ""), "date": target_date}
 
 
 @mcp.tool()
 def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> dict[str, Any]:
     """
-    查询图书馆预约记录。record_type: 1(普通) / 3(研习) / 4(考研)
+    【必须调用】查询图书馆预约记录 - 获取真实的预约历史
+    
+    功能：从图书馆系统查询预约记录
+    record_type: 1(普通) / 3(研习) / 4(考研)
+    
+    重要：不要编造预约记录，必须调用此工具获取真实数据。
     """
-    return _library_records(record_type=record_type, page=page, limit=limit)
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用", "records": []}
+    
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号", "records": []}
+    
+    stored = load_json(LIBRARY_COOKIE_FILE)
+    bot = HenuLibraryBot(sid, pwd, stored or None)
+    if not bot.login():
+        return {"success": False, "msg": "图书馆登录失败", "records": []}
+    
+    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    return bot.list_seat_records(record_type=record_type, page=page, limit=limit)
 
 
 @mcp.tool()
 def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
     """
-    取消图书馆预约。record_type 支持 auto 自动识别。
+    【必须调用】取消图书馆预约 - 执行真实的取消操作
+    
+    功能：向图书馆系统提交取消预约请求
+    record_type 支持 auto 自动识别
+    
+    重要：不要假装取消成功，必须调用此工具执行真实的取消操作。
     """
-    return _library_cancel(record_id=record_id, record_type=record_type)
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用"}
+    
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号"}
+    
+    stored = load_json(LIBRARY_COOKIE_FILE)
+    bot = HenuLibraryBot(sid, pwd, stored or None)
+    if not bot.login():
+        return {"success": False, "msg": "图书馆登录失败"}
+    
+    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    result = bot.cancel_seat_record(record_id=str(record_id), record_type=str(record_type or "1"))
+    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    return result
 
 
 @mcp.tool()
