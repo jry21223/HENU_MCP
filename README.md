@@ -85,9 +85,24 @@ pwd
 - `setup_account` - 设置学号密码
 - `sync_schedule` - 同步课表数据
 - `current_course` - 查询当前课程
+- `latest_schedule` - 获取最新课表
+- `library_locations` - 查看图书馆区域
 - `library_reserve` - 预约图书馆座位
 - `library_records` - 查询预约记录
 - `library_cancel` - 取消预约
+- `set_calibration_source` - 设置西瓜儿API自动获取节次时间
+- `system_status` - 查看系统状态
+
+### 4. 配置节次时间（可选）
+
+MCP服务器支持通过西瓜儿API自动获取节次时间。如果你有西瓜儿APP的抓包数据，可以配置：
+
+```bash
+# 运行配置脚本
+python3 setup_xiqueer.py
+```
+
+或者通过MCP工具 `set_calibration_source` 配置。配置后，系统会自动从西瓜儿API获取最新的节次时间。
 
 ## 项目结构
 
