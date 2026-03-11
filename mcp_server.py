@@ -979,7 +979,7 @@ def fetch_schedule(
     return result
 
 
-def latest_schedule() -> dict[str, Any]:
+def _latest_schedule_impl() -> dict[str, Any]:
     """
     【必须调用】获取完整课表 - 返回一周的所有课程安排
 
@@ -994,7 +994,7 @@ def latest_schedule() -> dict[str, Any]:
         return {"success": False, "msg": f"获取课表失败: {e}"}
 
 
-def latest_schedule_current_week(timezone: str = "Asia/Shanghai") -> dict[str, Any]:
+def _latest_schedule_current_week_impl(timezone: str = "Asia/Shanghai") -> dict[str, Any]:
     """
     【必须调用】获取本周课表 - 只返回本周真正在上的课程
     
@@ -1022,7 +1022,7 @@ def latest_schedule_current_week(timezone: str = "Asia/Shanghai") -> dict[str, A
         return {"success": False, "msg": f"获取本周课表失败: {e}"}
 
 
-def current_course(
+def _current_course_impl(
     timezone: str = "Asia/Shanghai",
     auto_calibrate: bool = True,
 ) -> dict[str, Any]:
@@ -1075,7 +1075,7 @@ def list_output_files(limit: int = 20) -> list[dict[str, Any]]:
     ]
 
 
-def library_locations() -> dict[str, Any]:
+def _library_locations_impl() -> dict[str, Any]:
     """
     【必须调用】查看图书馆区域列表 - 获取所有可预约的图书馆区域
 
@@ -1091,7 +1091,7 @@ def library_locations() -> dict[str, Any]:
     ]}
 
 
-def library_reserve(
+def _library_reserve_impl(
     location: str = "",
     seat_no: str = "",
     target_date: str = "",
@@ -1124,21 +1124,17 @@ def library_reserve(
     if not target_date:
         target_date = (_now_dt().date() + timedelta(days=1)).strftime("%Y-%m-%d")
     
-    # 构建 bot 并预约
-    stored = load_json(LIBRARY_COOKIE_FILE)
-    bot = HenuLibraryBot(sid, pwd, stored or None)
-    
-    if not bot.login():
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
         return {"success": False, "msg": "图书馆登录失败"}
-    
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+
     result = bot.reserve(target_location, target_seat, target_date, preferred_time=str(preferred_time or "08:00"))
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    _save_library_cookies(bot.get_cookies())
     
     return {"success": result.get("success"), "msg": result.get("msg", ""), "date": target_date}
 
 
-def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> dict[str, Any]:
+def _library_records_impl(record_type: str = "1", page: int = 1, limit: int = 20) -> dict[str, Any]:
     """
     【必须调用】查询图书馆预约记录 - 获取真实的预约历史
 
@@ -1154,16 +1150,15 @@ def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> d
     if not sid or not pwd:
         return {"success": False, "msg": "缺少账号", "records": []}
     
-    stored = load_json(LIBRARY_COOKIE_FILE)
-    bot = HenuLibraryBot(sid, pwd, stored or None)
-    if not bot.login():
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
         return {"success": False, "msg": "图书馆登录失败", "records": []}
-    
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+
+    _save_library_cookies(bot.get_cookies())
     return bot.list_seat_records(record_type=record_type, page=page, limit=limit)
 
 
-def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
+def _library_cancel_impl(record_id: str, record_type: str = "auto") -> dict[str, Any]:
     """
     【必须调用】取消图书馆预约 - 执行真实的取消操作
 
@@ -1179,14 +1174,12 @@ def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
     if not sid or not pwd:
         return {"success": False, "msg": "缺少账号"}
     
-    stored = load_json(LIBRARY_COOKIE_FILE)
-    bot = HenuLibraryBot(sid, pwd, stored or None)
-    if not bot.login():
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
         return {"success": False, "msg": "图书馆登录失败"}
-    
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+
     result = bot.cancel_seat_record(record_id=str(record_id), record_type=str(record_type or "1"))
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
+    _save_library_cookies(bot.get_cookies())
     return result
 
 
@@ -1279,12 +1272,7 @@ def library_locations() -> dict[str, Any]:
     - 只有此工具返回的区域列表才是准确的
     - 预约前必须先调用此工具确认可用区域
     """
-    if HenuLibraryBot is None:
-        return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_EXPECTED_FILE}", "locations": []}
-    return {"success": True, "locations": [
-        {"location": name, "area_id": str(area_id)} 
-        for name, area_id in HenuLibraryBot.LOCATIONS.items()
-    ]}
+    return _library_locations_impl()
 
 
 @mcp.tool()
@@ -1310,37 +1298,12 @@ def library_reserve(
     - 预约失败时必须如实告知用户失败原因
     - 只有工具返回的结果才是真实的预约状态
     """
-    if HenuLibraryBot is None:
-        return {"success": False, "msg": "图书馆模块不可用"}
-    
-    profile = load_json(PROFILE_FILE)
-    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
-    if not sid or not pwd:
-        return {"success": False, "msg": "缺少账号"}
-    
-    # 使用默认值
-    target_location = str(location or profile.get("library_location", "")).strip()
-    target_seat = str(seat_no or profile.get("library_seat_no", "")).strip()
-    
-    if not target_location or not target_seat:
-        return {"success": False, "msg": "请提供 location/seat_no 或在 setup_account 中设置默认值"}
-    
-    # 日期默认为明天
-    if not target_date:
-        target_date = (_now_dt().date() + timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    # 构建 bot 并预约
-    stored = load_json(LIBRARY_COOKIE_FILE)
-    bot = HenuLibraryBot(sid, pwd, stored or None)
-    
-    if not bot.login():
-        return {"success": False, "msg": "图书馆登录失败"}
-    
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
-    result = bot.reserve(target_location, target_seat, target_date, preferred_time=str(preferred_time or "08:00"))
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
-    
-    return {"success": result.get("success"), "msg": result.get("msg", ""), "date": target_date}
+    return _library_reserve_impl(
+        location=location,
+        seat_no=seat_no,
+        target_date=target_date,
+        preferred_time=preferred_time,
+    )
 
 
 @mcp.tool()
@@ -1353,21 +1316,7 @@ def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> d
     
     重要：不要编造预约记录，必须调用此工具获取真实数据。
     """
-    if HenuLibraryBot is None:
-        return {"success": False, "msg": "图书馆模块不可用", "records": []}
-    
-    profile = load_json(PROFILE_FILE)
-    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
-    if not sid or not pwd:
-        return {"success": False, "msg": "缺少账号", "records": []}
-    
-    stored = load_json(LIBRARY_COOKIE_FILE)
-    bot = HenuLibraryBot(sid, pwd, stored or None)
-    if not bot.login():
-        return {"success": False, "msg": "图书馆登录失败", "records": []}
-    
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
-    return bot.list_seat_records(record_type=record_type, page=page, limit=limit)
+    return _library_records_impl(record_type=record_type, page=page, limit=limit)
 
 
 @mcp.tool()
@@ -1380,23 +1329,7 @@ def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
     
     重要：不要假装取消成功，必须调用此工具执行真实的取消操作。
     """
-    if HenuLibraryBot is None:
-        return {"success": False, "msg": "图书馆模块不可用"}
-    
-    profile = load_json(PROFILE_FILE)
-    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
-    if not sid or not pwd:
-        return {"success": False, "msg": "缺少账号"}
-    
-    stored = load_json(LIBRARY_COOKIE_FILE)
-    bot = HenuLibraryBot(sid, pwd, stored or None)
-    if not bot.login():
-        return {"success": False, "msg": "图书馆登录失败"}
-    
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
-    result = bot.cancel_seat_record(record_id=str(record_id), record_type=str(record_type or "1"))
-    save_json(LIBRARY_COOKIE_FILE, bot.get_cookies())
-    return result
+    return _library_cancel_impl(record_id=record_id, record_type=record_type)
 
 
 @mcp.tool()
@@ -1407,10 +1340,7 @@ def current_course(
     """
     获取“当前正在上的课 + 下一节课”。
     """
-    return get_current_course_status(
-        timezone=timezone,
-        auto_calibrate=auto_calibrate,
-    )
+    return _current_course_impl(timezone=timezone, auto_calibrate=auto_calibrate)
 
 
 @mcp.tool()
@@ -1422,11 +1352,7 @@ def latest_schedule() -> dict[str, Any]:
     
     重要：不要编造课表，必须调用此工具获取真实的课程安排。
     """
-    try:
-        data = load_latest_clean_schedule(OUTPUT_DIR)
-        return {"success": True, "schedule": data.get("schedule", {})}
-    except Exception as e:
-        return {"success": False, "msg": f"获取课表失败: {e}"}
+    return _latest_schedule_impl()
 
 
 @mcp.tool()
@@ -1442,21 +1368,7 @@ def latest_schedule_current_week(timezone: str = "Asia/Shanghai") -> dict[str, A
     重要：这个工具比latest_schedule更准确，因为它会过滤掉本周没有的课程。
     例如：如果某门课是"1-9周"，而现在是第10周，这门课不会出现在结果中。
     """
-    try:
-        data = load_latest_clean_schedule(OUTPUT_DIR)
-        schedule = data.get("schedule", {})
-        
-        current_week = _get_current_week(timezone)
-        filtered_schedule = _filter_courses_by_week(schedule, current_week)
-        
-        return {
-            "success": True,
-            "current_week": current_week,
-            "schedule": filtered_schedule,
-            "msg": f"当前第{current_week}周的课表"
-        }
-    except Exception as e:
-        return {"success": False, "msg": f"获取本周课表失败: {e}"}
+    return _latest_schedule_current_week_impl(timezone=timezone)
 
 
 @mcp.tool()
