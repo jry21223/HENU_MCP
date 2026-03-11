@@ -199,10 +199,12 @@ class HenuXkClient:
         result = self.fetch_page(url)
         text = result["text"]
         login_id = self._extract_var(text, "_loginid") or self._extract_var(text, "G_LOGIN_ID")
+        user_code = self._extract_var(text, "_userCode") or self._extract_var(text, "G_USER_CODE")
         is_guest = login_id.lower() in {"", "guest", "kingo.guest"}
         return {
             "authenticated": bool(login_id) and not is_guest and not result["invalid_auth"],
             "login_id": login_id,
+            "user_code": user_code,
             "user_type": self._extract_var(text, "_usertype") or self._extract_var(text, "G_USER_TYPE"),
             "current_xn": self._extract_var(text, "_currentXn"),
             "current_xq": self._extract_var(text, "_currentXq"),
@@ -246,6 +248,107 @@ class HenuXkClient:
             return self._check_logged_in()
         except Exception:
             return False
+
+    @staticmethod
+    def _extract_student_xh(schedule_page_html: str, fallback: str) -> str:
+        patterns = [
+            r'id=["\']xh["\'][^>]*value=["\'](.*?)["\']',
+            r'name=["\']xh["\'][^>]*value=["\'](.*?)["\']',
+            r'value=["\'](.*?)["\'][^>]*id=["\']xh["\']',
+            r'value=["\'](.*?)["\'][^>]*name=["\']xh["\']',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, schedule_page_html, re.I)
+            if match and match.group(1).strip():
+                return match.group(1).strip()
+        return fallback
+
+    @staticmethod
+    def _extract_student_term(schedule_page_html: str) -> tuple[str, str]:
+        def _pick(field: str) -> str:
+            patterns = [
+                rf'id=["\']{field}["\'][^>]*value=["\'](.*?)["\']',
+                rf'name=["\']{field}["\'][^>]*value=["\'](.*?)["\']',
+                rf'value=["\'](.*?)["\'][^>]*id=["\']{field}["\']',
+                rf'value=["\'](.*?)["\'][^>]*name=["\']{field}["\']',
+            ]
+            for pattern in patterns:
+                m = re.search(pattern, schedule_page_html, re.I)
+                if m and m.group(1).strip():
+                    return m.group(1).strip()
+            return ""
+
+        xn = _pick("xn")
+        xq = _pick("xq") or _pick("xq_m")
+        return xn, xq
+
+    @staticmethod
+    def _extract_student_data_paths(schedule_page_html: str) -> tuple[str, str]:
+        default_list = "../wsxk/xkjg.ckdgxsxdkchj_data10319.jsp"
+        default_grid = "../student/wsxk.xskcb10319.jsp"
+        patterns = [
+            r"""frmaction\s*=\s*\$\(["']cxfs_lb["']\)\.checked\s*\?\s*["']([^"']+)["']\s*:\s*["']([^"']+)["']""",
+            r"""frmaction\s*=\s*[^;]*\?\s*["']([^"']+)["']\s*:\s*["']([^"']+)["']""",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, schedule_page_html, re.I)
+            if m:
+                return m.group(1), m.group(2)
+
+        jsp_paths = re.findall(r"""["']([^"']+\.jsp)["']""", schedule_page_html, re.I)
+        list_path = ""
+        grid_path = ""
+        for path in jsp_paths:
+            lower = path.lower()
+            if not list_path and ("ckdgxsxdkchj_data" in lower or ("xkjg" in lower and "data" in lower)):
+                list_path = path
+            if (
+                not grid_path
+                and "xskcb" in lower
+                and "excel" not in lower
+                and "_exp" not in lower
+            ):
+                grid_path = path
+            if list_path and grid_path:
+                break
+        return list_path or default_list, grid_path or default_grid
+
+    def build_student_schedule_data_urls(
+        self,
+        schedule_page_url: str,
+        schedule_page_html: str,
+        xn: str,
+        xq: str,
+        xh: str,
+    ) -> list[tuple[str, str]]:
+        list_path, grid_path = self._extract_student_data_paths(schedule_page_html)
+        raw_params = f"xn={xn}&xq={xq}&xh={xh}"
+        encoded_params = base64.b64encode(raw_params.encode("utf-8")).decode("ascii")
+
+        list_url = urljoin(schedule_page_url, list_path)
+        grid_url = urljoin(schedule_page_url, grid_path)
+        plain_params = [raw_params, f"xnm={xn}&xqm={xq}&xh={xh}"]
+
+        candidates: list[tuple[str, str]] = [
+            ("list", f"{list_url}?params={encoded_params}"),
+            ("grid", f"{grid_url}?params={encoded_params}"),
+        ]
+        for query in plain_params:
+            candidates.append(("list", f"{list_url}?{query}"))
+            candidates.append(("grid", f"{grid_url}?{query}"))
+
+        deduped: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for label, url in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append((label, url))
+        return deduped
+
+
+def _is_schedule_grid_html(text: str) -> bool:
+    return 'id="mytable"' in text or "id='mytable'" in text
 
 
 # ===== 课表解析 =====
@@ -409,37 +512,96 @@ def sync_schedule(xn: str | None = None, xq: str | None = None) -> dict[str, Any
     save_json(COOKIE_FILE, client.get_cookies())
     context = client.fetch_user_context()
     
-    # 获取课表页面
-    target_xn = str(xn or context.get("current_xn") or "").strip()
-    target_xq = str(xq or context.get("current_xq") or "").strip()
-    
-    # 尝试学生课表入口
     schedule_entry = client.fetch_page(f"{client.base_url}/student/xkjg.wdkb.jsp")
-    
-    if schedule_entry["invalid_auth"]:
+    if schedule_entry.get("invalid_auth"):
         return {"success": False, "msg": "会话失效"}
-    
-    # 尝试解析并抓取课表数据
+
+    entry_xn, entry_xq = client._extract_student_term(schedule_entry.get("text", ""))
+    target_xn = str(xn or context.get("current_xn") or entry_xn or "").strip()
+    target_xq = str(xq or context.get("current_xq") or entry_xq or "").strip()
+    fallback_xh = str(context.get("user_code") or context.get("login_id") or sid or "").strip()
+    target_xh = client._extract_student_xh(schedule_entry.get("text", ""), fallback_xh)
+
+    if not target_xn or not target_xq or not target_xh:
+        return {
+            "success": False,
+            "msg": "缺少课表查询参数（xn/xq/xh）",
+            "context": {
+                "current_xn": context.get("current_xn"),
+                "current_xq": context.get("current_xq"),
+                "login_id": context.get("login_id"),
+                "user_code": context.get("user_code"),
+            },
+        }
+
+    data_urls = client.build_student_schedule_data_urls(
+        schedule_page_url=schedule_entry.get("final_url", f"{client.base_url}/student/xkjg.wdkb.jsp"),
+        schedule_page_html=schedule_entry.get("text", ""),
+        xn=target_xn,
+        xq=target_xq,
+        xh=target_xh,
+    )
+    data_urls = sorted(data_urls, key=lambda item: 0 if item[0] == "grid" else 1)
+
+    tried_urls: list[dict[str, Any]] = []
+    chosen_page: dict[str, Any] | None = None
+    first_valid_page: dict[str, Any] | None = None
+
+    for label, data_url in data_urls:
+        page = client.fetch_page(data_url, referer=schedule_entry.get("final_url"))
+        tried_urls.append(
+            {
+                "label": label,
+                "url": data_url,
+                "final_url": page.get("final_url"),
+                "status_code": page.get("status_code"),
+                "title": page.get("title"),
+                "invalid_auth": page.get("invalid_auth"),
+            }
+        )
+        if page.get("invalid_auth"):
+            continue
+        if first_valid_page is None:
+            first_valid_page = page
+        if _is_schedule_grid_html(page.get("text", "")):
+            chosen_page = page
+            break
+
+    if chosen_page is None and first_valid_page is not None:
+        chosen_page = first_valid_page
+
+    if chosen_page is None:
+        return {
+            "success": False,
+            "msg": "未获取到可解析的课表页面",
+            "tried_urls": tried_urls,
+        }
+
     try:
-        # 保存原始页面
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         grid_file = OUTPUT_DIR / f"schedule_grid_{ts}.html"
-        grid_file.write_text(schedule_entry["text"], encoding="utf-8")
+        grid_file.write_text(chosen_page.get("text", ""), encoding="utf-8")
         
-        # 解析课表
-        parsed = parse_schedule_grid(schedule_entry["text"])
+        parsed = parse_schedule_grid(chosen_page.get("text", ""))
         files = save_clean_schedule(parsed)
         
         return {
             "success": True,
             "msg": "课表同步完成",
-            "term": {"xn": target_xn, "xq": target_xq},
+            "term": {"xn": target_xn, "xq": target_xq, "xh": target_xh},
             "files": files,
             "course_count": sum(len(items) for items in parsed.get("schedule", {}).values()),
+            "source_url": chosen_page.get("final_url", ""),
+            "tried_urls": tried_urls,
         }
     except Exception as e:
-        return {"success": False, "msg": f"解析课表失败: {e}", "raw_file": str(grid_file) if 'grid_file' in dir() else None}
+        return {
+            "success": False,
+            "msg": f"解析课表失败: {e}",
+            "raw_file": str(grid_file) if "grid_file" in dir() else None,
+            "tried_urls": tried_urls,
+        }
 
 
 def current_course(timezone: str = "Asia/Shanghai") -> dict[str, Any]:
