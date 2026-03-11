@@ -8,22 +8,33 @@
 git clone -b openclaw-skill https://github.com/jry21223/HENU_MCP.git henu_campus_assistant
 cp -r henu_campus_assistant ~/.openclaw/workspace/skills/
 cd ~/.openclaw/workspace/skills/henu_campus_assistant
-pip3 install -r requirements.txt
+
+# Ubuntu/Debian: 避免 "externally managed environment" 报错
+sudo apt update
+sudo apt install -y python3-venv
+
+# 使用项目虚拟环境安装依赖
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+
+# 可选：激活后可直接使用 python/pip
+source .venv/bin/activate
 ```
 
 ## 核心命令
 
 ```bash
-python3 henu_cli.py setup_account --student_id "<学号>" --password "<密码>"
-python3 henu_cli.py sync_schedule
-python3 henu_cli.py latest_schedule_current_week
-python3 henu_cli.py current_course
-python3 henu_cli.py library_locations
-python3 henu_cli.py library_reserve --location "<区域>" --seat_no "<座位号>" --preferred_time "10:30"
-python3 henu_cli.py library_records
-python3 henu_cli.py library_cancel --record_id "<记录ID>"
-python3 henu_cli.py set_calibration_source --data "<DATA>" --cookie "<COOKIE>"
-python3 henu_cli.py system_status
+.venv/bin/python henu_cli.py setup_account --student_id "<学号>" --password "<密码>"
+.venv/bin/python henu_cli.py sync_schedule
+.venv/bin/python henu_cli.py latest_schedule_current_week
+.venv/bin/python henu_cli.py current_course
+.venv/bin/python henu_cli.py library_locations
+.venv/bin/python henu_cli.py library_reserve --location "<区域>" --seat_no "<座位号>" --preferred_time "10:30"
+.venv/bin/python henu_cli.py library_records
+.venv/bin/python henu_cli.py library_cancel --record_id "<记录ID>"
+.venv/bin/python henu_cli.py set_calibration_source --data "<DATA>" --cookie "<COOKIE>"
+.venv/bin/python henu_cli.py system_status
 ```
 
 ## 关键文件
@@ -39,3 +50,4 @@ python3 henu_cli.py system_status
 - 不依赖外部 `../图书馆自动预约/web`
 - 账号与 Cookie 仅本地保存
 - 相关分支：`mcp-server`、`main`
+- Ubuntu/Debian 不要直接执行系统级 `pip3 install -r requirements.txt`
