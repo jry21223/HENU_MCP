@@ -887,95 +887,34 @@ def fetch_schedule(
     return result
 
 
-def get_latest_schedule() -> dict[str, Any]:
-    """读取最新结构化课表（schedule_clean_latest.json）。"""
-    try:
-        data = load_latest_clean_schedule(OUTPUT_DIR)
-    except Exception as exc:
-        return {"success": False, "msg": str(exc)}
+def latest_schedule() -> dict[str, Any]:
+    """
+    【必须调用】获取完整课表 - 返回一周的所有课程安排
 
-    day_count = {day: len(items) for day, items in (data.get("schedule") or {}).items()}
-    return {
-        "success": True,
-        "meta": data.get("meta", {}),
-        "day_count": day_count,
-        "schedule": data.get("schedule", {}),
-        "source_file": data.get("source_file", ""),
-    }
+    功能：返回结构化的课表数据，按星期组织
+
+    重要：不要编造课表，必须调用此工具获取真实的课程安排。
+    """
+    return get_latest_schedule()
 
 
-def get_current_course_status(
+def current_course(
     timezone: str = "Asia/Shanghai",
-    date_override: str = "",
-    time_override: str = "",
     auto_calibrate: bool = True,
 ) -> dict[str, Any]:
     """
-    判断当前是否在上课，并返回下一节课。
-    - date_override: YYYY-MM-DD（可选）
-    - time_override: HH:MM（可选）
+    【必须调用】查询当前课程状态 - 获取正在上的课和下一节课
+
+    功能：基于当前时间和课表，返回：
+    - 当前正在上的课程（如果有）
+    - 下一节课的信息
+
+    重要：不要猜测或编造课程信息，必须调用此工具获取准确的实时数据。
     """
-    try:
-        data = load_latest_clean_schedule(OUTPUT_DIR)
-    except Exception:
-        return {
-            "success": False,
-            "msg": "未找到最新课表，请先执行 fetch_schedule()",
-        }
-
-    calibration_result: dict[str, Any] = {}
-    if auto_calibrate:
-        calibration_result = _auto_calibrate_period_time_impl(force=False)
-
-    period_times = _load_period_times()
-    now = _now_dt(timezone)
-    if date_override:
-        try:
-            d = datetime.strptime(date_override, "%Y-%m-%d").date()
-            now = now.replace(year=d.year, month=d.month, day=d.day)
-        except ValueError:
-            return {"success": False, "msg": "date_override 格式必须为 YYYY-MM-DD"}
-    if time_override:
-        if not _is_hhmm(time_override):
-            return {"success": False, "msg": "time_override 格式必须为 HH:MM"}
-        hh, mm = time_override.split(":")
-        now = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
-
-    weekday_cn = WEEKDAY_CN[now.weekday()]
-    day_courses = (data.get("schedule") or {}).get(weekday_cn, [])
-    now_minutes = now.hour * 60 + now.minute
-
-    current_courses: list[dict[str, Any]] = []
-    future_courses: list[dict[str, Any]] = []
-    unresolved_courses: list[dict[str, Any]] = []
-
-    for row in day_courses:
-        course = _course_with_clock(row, period_times)
-        if not course:
-            unresolved_courses.append(row)
-            continue
-        if course["clock_start_minutes"] <= now_minutes <= course["clock_end_minutes"]:
-            current_courses.append(course)
-        elif now_minutes < course["clock_start_minutes"]:
-            future_courses.append(course)
-
-    future_courses.sort(key=lambda x: x["clock_start_minutes"])
-    next_course = future_courses[0] if future_courses else {}
-
-    return {
-        "success": True,
-        "timezone": timezone,
-        "now_text": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "weekday_cn": weekday_cn,
-        "current_course_count": len(current_courses),
-        "current_courses": current_courses,
-        "next_course": next_course,
-        "unresolved_course_count": len(unresolved_courses),
-        "unresolved_courses": unresolved_courses,
-        "auto_calibration": calibration_result,
-        "period_time_config_file": str(PERIOD_TIME_FILE),
-        "period_times": period_times,
-    }
+    return get_current_course_status(
+        timezone=timezone,
+        auto_calibrate=auto_calibrate,
+    )
 
 
 def rebuild_clean_schedule_from_latest_grid() -> dict[str, Any]:
@@ -1012,110 +951,61 @@ def list_output_files(limit: int = 20) -> list[dict[str, Any]]:
     ]
 
 
-def _library_locations() -> list[dict[str, str]]:
+def library_locations() -> dict[str, Any]:
+    """
+    【必须调用】查看图书馆区域列表 - 获取所有可预约的图书馆区域
+
+    功能：返回图书馆所有区域的名称和ID
+
+    重要：不要编造区域信息，必须调用此工具获取准确的区域列表。
+    """
     if HenuLibraryBot is None:
-        return []
-    return [{"location": name, "area_id": str(area_id)} for name, area_id in HenuLibraryBot.LOCATIONS.items()]  # type: ignore
+        return {"success": False, "msg": f"图书馆核心模块不可用: {LIBRARY_CORE_DIR}/henu_core.py", "locations": []}
+    return {"success": True, "locations": _library_locations()}
 
 
-def _library_reserve(
+def library_reserve(
     location: str = "",
     seat_no: str = "",
-    target_date: str | None = None,
-    preferred_time: str | None = None,
-    save_as_default: bool = True,
+    target_date: str = "",
+    preferred_time: str = "08:00",
 ) -> dict[str, Any]:
-    sid, pwd = _resolve_account("", "", use_saved_account=True)
-    if not sid:
-        return {"success": False, "msg": "缺少学号，请先 setup_account"}
-    if not pwd:
-        return {"success": False, "msg": "缺少密码，请先 setup_account"}
+    """
+    【必须调用】预约图书馆座位 - 执行真实的座位预约操作
 
-    default_location, default_seat = _resolve_library_defaults()
-    target_location = str(location or default_location).strip()
-    target_seat = str(seat_no or default_seat).strip()
-    if not target_location or not target_seat:
-        return {
-            "success": False,
-            "msg": "请提供 location/seat_no，或先在 setup_account 里设置图书馆默认区域和座位",
-            "library_defaults": {"location": default_location, "seat_no": default_seat},
-            "locations": _library_locations(),
-        }
+    功能：向图书馆系统提交座位预约请求
 
-    try:
-        date_text = _target_library_date(target_date)
-    except ValueError as exc:
-        return {"success": False, "msg": str(exc)}
-
-    bot = _build_library_bot(sid, pwd)
-    if bot is None:
-        return {"success": False, "msg": "图书馆登录失败，请检查账号密码或会话状态"}
-
-    result = bot.reserve(target_location, target_seat, date_text, preferred_time=preferred_time)
-    _save_library_cookies(bot.get_cookies())
-
-    if result.get("success") and save_as_default:
-        _save_profile_fields({"library_location": target_location, "library_seat_no": target_seat})
-
-    return {
-        "success": bool(result.get("success")),
-        "msg": str(result.get("msg", "")),
-        "student_id": sid,
-        "target_date": date_text,
-        "location": target_location,
-        "seat_no": target_seat,
-        "library_cookie_file": str(LIBRARY_COOKIE_FILE),
-    }
+    重要：不要假装预约成功，必须调用此工具执行真实的预约操作。
+    预约结果会返回成功或失败的详细信息。
+    """
+    return _library_reserve(
+        location=location,
+        seat_no=seat_no,
+        target_date=target_date,
+        preferred_time=preferred_time,
+    )
 
 
-def _library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> dict[str, Any]:
-    sid, pwd = _resolve_account("", "", use_saved_account=True)
-    if not sid:
-        return {"success": False, "msg": "缺少学号，请先 setup_account"}
-    if not pwd:
-        return {"success": False, "msg": "缺少密码，请先 setup_account"}
+def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> dict[str, Any]:
+    """
+    【必须调用】查询图书馆预约记录 - 获取真实的预约历史
 
-    bot = _build_library_bot(sid, pwd)
-    if bot is None:
-        return {"success": False, "msg": "图书馆登录失败，请检查账号密码或会话状态", "records": []}
+    功能：从图书馆系统查询预约记录
 
-    result = bot.list_seat_records(record_type=record_type, page=page, limit=limit)
-    _save_library_cookies(bot.get_cookies())
-    result["student_id"] = sid
-    return result
+    重要：不要编造预约记录，必须调用此工具获取真实数据。
+    """
+    return _library_records(record_type=record_type, page=page, limit=limit)
 
 
-def _library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
-    sid, pwd = _resolve_account("", "", use_saved_account=True)
-    if not sid:
-        return {"success": False, "msg": "缺少学号，请先 setup_account"}
-    if not pwd:
-        return {"success": False, "msg": "缺少密码，请先 setup_account"}
-    if not str(record_id or "").strip():
-        return {"success": False, "msg": "record_id 不能为空"}
+def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
+    """
+    【必须调用】取消图书馆预约 - 执行真实的取消操作
 
-    bot = _build_library_bot(sid, pwd)
-    if bot is None:
-        return {"success": False, "msg": "图书馆登录失败，请检查账号密码或会话状态"}
+    功能：向图书馆系统提交取消预约请求
 
-    rt = str(record_type or "auto").strip().lower()
-    if rt in {"", "auto"}:
-        resolved = None
-        for candidate in ("1", "3", "4"):
-            records = bot.list_seat_records(record_type=candidate, page=1, limit=100)
-            for row in records.get("records") or []:
-                if str(row.get("id")) == str(record_id):
-                    resolved = candidate
-                    break
-            if resolved:
-                break
-        rt = resolved or "1"
-
-    result = bot.cancel_seat_record(record_id=record_id, record_type=rt)
-    _save_library_cookies(bot.get_cookies())
-    result["student_id"] = sid
-    result["record_type_resolved"] = rt
-    return result
+    重要：不要假装取消成功，必须调用此工具执行真实的取消操作。
+    """
+    return _library_cancel(record_id=record_id, record_type=record_type)
 
 
 # ===== MCP 精简对外工具 =====
@@ -1131,10 +1021,14 @@ def setup_account(
     calibrate_period_time: bool = True,
 ) -> dict[str, Any]:
     """
-    一站式初始化账号：
-    1) 保存账号
-    2) 可选验证登录
-    3) 可选立即校准节次时间
+    【必须调用】初始化河大账号 - 这是使用其他功能的前提
+    
+    功能：
+    1) 保存学号和密码到本地
+    2) 验证登录河大教务系统
+    3) 自动校准节次时间
+    
+    重要：不要编造账号信息，必须使用用户提供的真实学号和密码调用此工具。
     """
     result = save_account(
         student_id=student_id,
@@ -1167,7 +1061,12 @@ def sync_schedule(
     auto_calibrate: bool = True,
 ) -> dict[str, Any]:
     """
-    同步课表（使用已保存账号）并生成 clean 结构化结果。
+    【必须调用】同步课表 - 从教务系统获取真实课表数据
+    
+    功能：从河大教务系统抓取课表并生成结构化数据
+    
+    重要：不要编造课表信息，必须调用此工具获取真实数据。
+    课表数据包含：课程名称、教师、时间、地点等详细信息。
     """
     calibration: dict[str, Any] = {}
     if auto_calibrate:
