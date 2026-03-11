@@ -124,6 +124,23 @@ python3 diagnose_mcp.py
 
 #### 其他MCP客户端配置
 
+**LangBot 配置：**
+
+LangBot 支持通过 Web 界面配置 MCP 服务器：
+
+1. 进入 Plugin Management → MCP Management
+2. 点击 Add → Create MCP Server
+3. 填写配置：
+   ```
+   名称: 河大校园助手
+   命令: bash
+   参数: ["-c", "cd \"<YOUR_PROJECT_PATH>\" && source venv/bin/activate && python3 mcp_server.py --transport stdio"]
+   ```
+4. 测试连接并提交
+5. 启用服务器开关
+
+详细配置请参考：[LANGBOT_CONFIG.md](LANGBOT_CONFIG.md)
+
 **使用uvx：**
 ```json
 {
