@@ -185,9 +185,8 @@ def _normalize_teaching_period_times(
 ) -> tuple[dict[str, dict[str, str]], dict[str, Any]]:
     """
     规范化节次配置：
-    1) 按开始时间排序
-    2) 当节次数较多(>=13)时，剔除中午短节次(12:00-14:10 且时长 20-35 分钟)
-    3) 重新连续编号为 1..N，避免中午插入导致后续节次错位
+    1) 仅做时间格式清洗与排序
+    2) 保留原始节次编号，禁止重编号，避免“第N节”映射错位
     """
     items: list[tuple[int, str, str]] = []
     for key, cfg in (period_times or {}).items():
@@ -208,31 +207,16 @@ def _normalize_teaching_period_times(
     if not items:
         return {}, {"applied": False, "removed_midday_count": 0}
 
-    items.sort(key=lambda x: (_to_minutes(x[1]), x[0]))
-    removed_midday: list[tuple[int, str, str]] = []
-
-    if len(items) >= 13:
-        for period_no, start, end in items:
-            start_min = _to_minutes(start)
-            duration = _to_minutes(end) - start_min
-            if 12 * 60 <= start_min <= (14 * 60 + 10) and 20 <= duration <= 35:
-                removed_midday.append((period_no, start, end))
-        if removed_midday and (len(items) - len(removed_midday) >= 12):
-            removed_set = {(x[0], x[1], x[2]) for x in removed_midday}
-            items = [it for it in items if it not in removed_set]
-        else:
-            removed_midday = []
+    items.sort(key=lambda x: (x[0], _to_minutes(x[1])))
 
     normalized: dict[str, dict[str, str]] = {}
-    for idx, (_, start, end) in enumerate(items, start=1):
-        normalized[str(idx)] = {"start": start, "end": end}
+    for period_no, start, end in items:
+        normalized[str(period_no)] = {"start": start, "end": end}
 
     return normalized, {
         "applied": True,
-        "removed_midday_count": len(removed_midday),
-        "removed_midday_periods": [
-            {"period": p, "start": s, "end": e} for p, s, e in removed_midday
-        ],
+        "removed_midday_count": 0,
+        "removed_midday_periods": [],
     }
 
 
@@ -512,10 +496,12 @@ def _fetch_timetable_text_candidates(sid: str, pwd: str) -> list[tuple[str, str]
 def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
     now = _now_dt()
     state = _load_calibration_state()
+    normalization_state = state.get("normalization") if isinstance(state.get("normalization"), dict) else {}
+    legacy_compacted = int(normalization_state.get("removed_midday_count", 0) or 0) > 0
     if not force and state.get("last_attempt_at"):
         try:
             last = datetime.fromisoformat(str(state["last_attempt_at"]))
-            if now - last < timedelta(hours=6):
+            if now - last < timedelta(hours=6) and not legacy_compacted:
                 return {
                     "success": bool(state.get("success")),
                     "skipped": True,
@@ -555,11 +541,16 @@ def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
             best_matches = normalized_matches
 
     if len(best_matches) >= 4:
-        for period, cfg in best_matches.items():
+        new_period_times = dict(best_matches)
+        for period, cfg in new_period_times.items():
             old = period_times.get(period)
             if old != cfg:
                 period_times[period] = cfg
                 updated_count += 1
+        stale_periods = [k for k in list(period_times.keys()) if k not in new_period_times]
+        for stale_key in stale_periods:
+            period_times.pop(stale_key, None)
+            updated_count += 1
         if updated_count > 0:
             _save_period_times(period_times)
 
@@ -645,6 +636,57 @@ def _course_with_clock(
         "clock_end": end_hhmm,
         "clock_start_minutes": _to_minutes(start_hhmm),
         "clock_end_minutes": _to_minutes(end_hhmm),
+    }
+
+
+def get_current_course_status(
+    timezone: str = "Asia/Shanghai",
+    auto_calibrate: bool = True,
+) -> dict[str, Any]:
+    """
+    查询当前课程状态：当前课程 + 下一节课程，并附带节次时钟映射结果。
+    """
+    calibration: dict[str, Any] = {}
+    if auto_calibrate:
+        calibration = auto_calibrate_period_time(force=False)
+
+    try:
+        schedule_data = load_latest_clean_schedule(OUTPUT_DIR)
+    except Exception as exc:
+        return {"success": False, "msg": f"未找到课表，请先同步：{exc}", "period_time_calibration": calibration}
+
+    period_times = _load_period_times()
+    now = _now_dt(timezone)
+    now_minutes = now.hour * 60 + now.minute
+    weekday_cn = WEEKDAY_CN[now.weekday()]
+    day_courses = list((schedule_data.get("schedule") or {}).get(weekday_cn, []) or [])
+
+    current_courses: list[dict[str, Any]] = []
+    future_courses: list[tuple[int, dict[str, Any]]] = []
+
+    for item in day_courses:
+        with_clock = _course_with_clock(item, period_times)
+        if not with_clock:
+            continue
+        start_min = int(with_clock.get("clock_start_minutes", 0))
+        end_min = int(with_clock.get("clock_end_minutes", 0))
+        if start_min <= now_minutes <= end_min:
+            current_courses.append(with_clock)
+        elif now_minutes < start_min:
+            future_courses.append((start_min, with_clock))
+
+    future_courses.sort(key=lambda x: x[0])
+    next_course = future_courses[0][1] if future_courses else None
+
+    return {
+        "success": True,
+        "now": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": timezone,
+        "weekday": weekday_cn,
+        "current_courses": current_courses,
+        "next_course": next_course,
+        "period_times": period_times,
+        "period_time_calibration": calibration,
     }
 
 
