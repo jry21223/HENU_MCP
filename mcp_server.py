@@ -185,8 +185,9 @@ def _normalize_teaching_period_times(
 ) -> tuple[dict[str, dict[str, str]], dict[str, Any]]:
     """
     规范化节次配置：
-    1) 仅做时间格式清洗与排序
-    2) 保留原始节次编号，禁止重编号，避免“第N节”映射错位
+    1) 按开始时间排序
+    2) 强制剔除中午短节次(12:00-14:10 且时长 20-35 分钟，常见为原 6/7 节)
+    3) 重编号为连续 1..N（去掉中午短节后得到 13 节体系）
     """
     items: list[tuple[int, str, str]] = []
     for key, cfg in (period_times or {}).items():
@@ -207,16 +208,35 @@ def _normalize_teaching_period_times(
     if not items:
         return {}, {"applied": False, "removed_midday_count": 0}
 
-    items.sort(key=lambda x: (x[0], _to_minutes(x[1])))
+    items.sort(key=lambda x: (_to_minutes(x[1]), x[0]))
+
+    removed_midday: list[tuple[int, str, str]] = []
+    kept_items: list[tuple[int, str, str]] = []
+    for period_no, start, end in items:
+        start_min = _to_minutes(start)
+        duration = _to_minutes(end) - start_min
+        is_midday_short = 12 * 60 <= start_min <= (14 * 60 + 10) and 20 <= duration <= 35
+        if is_midday_short:
+            removed_midday.append((period_no, start, end))
+            continue
+        kept_items.append((period_no, start, end))
+
+    # 至少保留 10 节时才执行过滤，避免异常数据误删。
+    if removed_midday and len(kept_items) >= 10:
+        items = kept_items
+    else:
+        removed_midday = []
 
     normalized: dict[str, dict[str, str]] = {}
-    for period_no, start, end in items:
-        normalized[str(period_no)] = {"start": start, "end": end}
+    for idx, (_, start, end) in enumerate(items, start=1):
+        normalized[str(idx)] = {"start": start, "end": end}
 
     return normalized, {
         "applied": True,
-        "removed_midday_count": 0,
-        "removed_midday_periods": [],
+        "removed_midday_count": len(removed_midday),
+        "removed_midday_periods": [
+            {"period": p, "start": s, "end": e} for p, s, e in removed_midday
+        ],
     }
 
 
@@ -496,12 +516,10 @@ def _fetch_timetable_text_candidates(sid: str, pwd: str) -> list[tuple[str, str]
 def _auto_calibrate_period_time_impl(force: bool = False) -> dict[str, Any]:
     now = _now_dt()
     state = _load_calibration_state()
-    normalization_state = state.get("normalization") if isinstance(state.get("normalization"), dict) else {}
-    legacy_compacted = int(normalization_state.get("removed_midday_count", 0) or 0) > 0
     if not force and state.get("last_attempt_at"):
         try:
             last = datetime.fromisoformat(str(state["last_attempt_at"]))
-            if now - last < timedelta(hours=6) and not legacy_compacted:
+            if now - last < timedelta(hours=6):
                 return {
                     "success": bool(state.get("success")),
                     "skipped": True,
