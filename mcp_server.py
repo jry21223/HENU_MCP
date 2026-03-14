@@ -4,6 +4,9 @@ import argparse
 import json
 import re
 import sys
+import threading
+import time
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,6 +36,8 @@ LIBRARY_CORE_EXPECTED_FILE = BASE_DIR / "library_core" / "henu_core.py"
 LIBRARY_CORE_DIR = LIBRARY_CORE_EXPECTED_FILE.parent if LIBRARY_CORE_EXPECTED_FILE.exists() else None
 
 LIBRARY_COOKIE_FILE = BASE_DIR / "henu_library_cookies.json"
+SEMINAR_SIGNIN_TASK_FILE = BASE_DIR / "seminar_signin_tasks.json"
+SEMINAR_AUTO_SIGNIN_INTERVAL_SECONDS = 30
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 DEFAULT_PERIOD_TIMES: dict[str, dict[str, str]] = {
     "1": {"start": "08:00", "end": "08:45"},
@@ -51,6 +56,10 @@ DEFAULT_PERIOD_TIMES: dict[str, dict[str, str]] = {
     "14": {"start": "20:05", "end": "20:50"},
     "15": {"start": "20:55", "end": "21:40"},
 }
+_SEMINAR_SIGNIN_TASK_LOCK = threading.Lock()
+_SEMINAR_AUTO_SIGNIN_THREAD: threading.Thread | None = None
+_SEMINAR_AUTO_SIGNIN_THREAD_LOCK = threading.Lock()
+_LAST_LIBRARY_LOGIN_ERROR = ""
 
 # 尝试导入图书馆模块
 HenuLibraryBot = None
@@ -714,14 +723,20 @@ def _effective_profile() -> dict[str, Any]:
 
 def _mask_profile(profile: dict[str, Any]) -> dict[str, Any]:
     location, seat_no = _resolve_library_defaults()
+    seminar_groups = _load_seminar_groups()
+    seminar_tasks = _load_seminar_signin_tasks()
     return {
         "student_id": str(profile.get("student_id", "") or ""),
         "has_password": bool(profile.get("password")),
         "library_default_location": location,
         "library_default_seat_no": seat_no,
+        "seminar_groups_total": len(seminar_groups),
+        "seminar_signin_tasks_total": len(seminar_tasks),
+        "has_seminar_mobile": bool(str(profile.get("seminar_mobile") or profile.get("mobile") or "").strip()),
         "profile_file": str(PROFILE_FILE),
         "cookie_file": str(COOKIE_FILE),
         "library_cookie_file": str(LIBRARY_COOKIE_FILE),
+        "seminar_signin_task_file": str(SEMINAR_SIGNIN_TASK_FILE),
     }
 
 
@@ -758,6 +773,634 @@ def _resolve_library_defaults() -> tuple[str, str]:
     return location, seat_no
 
 
+def _parse_csv_text(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        items = [str(item or "").strip() for item in value]
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        items = re.split(r"[\s,，;；]+", text)
+    return [item for item in items if item]
+
+
+def _load_seminar_groups() -> dict[str, Any]:
+    profile = load_json(PROFILE_FILE)
+    groups = profile.get("seminar_groups") or {}
+    return groups if isinstance(groups, dict) else {}
+
+
+def _save_seminar_groups(groups: dict[str, Any]) -> None:
+    _save_profile_fields({"seminar_groups": groups})
+
+
+def _seminar_group_summary(name: str, item: dict[str, Any]) -> dict[str, Any]:
+    member_ids = [str(member).strip() for member in (item.get("member_ids") or []) if str(member).strip()]
+    return {
+        "group_name": name,
+        "member_ids": member_ids,
+        "member_count": len(member_ids),
+        "total_with_self": len(member_ids) + 1,
+        "note": str(item.get("note") or ""),
+        "updated_at": str(item.get("updated_at") or ""),
+    }
+
+
+def _saved_seminar_mobile() -> str:
+    profile = load_json(PROFILE_FILE)
+    return str(profile.get("seminar_mobile") or profile.get("mobile") or "").strip()
+
+
+def _load_seminar_signin_tasks() -> list[dict[str, Any]]:
+    data = load_json(SEMINAR_SIGNIN_TASK_FILE)
+    tasks = data.get("tasks") or []
+    if not isinstance(tasks, list):
+        return []
+    return [item for item in tasks if isinstance(item, dict)]
+
+
+def _save_seminar_signin_tasks(tasks: list[dict[str, Any]]) -> None:
+    save_json(SEMINAR_SIGNIN_TASK_FILE, {"tasks": tasks})
+
+
+def _parse_dt_text(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        parsed = None
+
+    if parsed is None:
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+
+    if parsed is None:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    return parsed
+
+
+def _format_dt_text(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.astimezone(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
+
+
+def _seminar_record_summary(record: dict[str, Any]) -> dict[str, Any]:
+    room_name = (
+        record.get("nameMerge")
+        or record.get("name")
+        or record.get("area")
+        or record.get("areaName")
+        or ""
+    )
+    return {
+        "id": str(record.get("id") or ""),
+        "area_id": str(record.get("area_id") or record.get("areaId") or ""),
+        "room_name": str(room_name or ""),
+        "title": str(record.get("title") or ""),
+        "status": str(record.get("status") or ""),
+        "status_name": str(record.get("status_name") or record.get("statusName") or ""),
+        "show_time": str(record.get("show_time") or record.get("showTime") or ""),
+        "begin_time": str(record.get("begin_time") or record.get("beginTime") or ""),
+        "end_time": str(record.get("end_time") or record.get("endTime") or ""),
+        "owner": str(record.get("owner") or ""),
+        "member_name": str(record.get("member_name") or record.get("memberName") or ""),
+        "member_id": str(record.get("member_id") or record.get("memberId") or ""),
+    }
+
+
+def _seminar_task_summary(task: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task_id": str(task.get("task_id") or ""),
+        "record_id": str(task.get("record_id") or ""),
+        "record_type": str(task.get("record_type") or ""),
+        "area_id": str(task.get("area_id") or ""),
+        "room_name": str(task.get("room_name") or ""),
+        "title": str(task.get("title") or ""),
+        "start_date": str(task.get("start_date") or ""),
+        "start_time": str(task.get("start_time") or ""),
+        "end_date": str(task.get("end_date") or ""),
+        "end_time": str(task.get("end_time") or ""),
+        "sign_at": str(task.get("sign_at") or ""),
+        "status": str(task.get("status") or ""),
+        "attempts": int(task.get("attempts") or 0),
+        "last_msg": str(task.get("last_msg") or ""),
+        "created_at": str(task.get("created_at") or ""),
+        "updated_at": str(task.get("updated_at") or ""),
+        "last_result": task.get("last_result") or {},
+    }
+
+
+def _normalize_compare_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _extract_seminar_record_id(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in ("id", "record_id", "recordId", "book_id", "bookId", "apply_id", "applyId"):
+        value = str(data.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _task_time_text(task: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(task.get("start_date") or ""),
+            str(task.get("start_time") or ""),
+            str(task.get("end_date") or ""),
+            str(task.get("end_time") or ""),
+        ]
+    )
+
+
+def _record_time_text(record: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(record.get("show_time") or record.get("showTime") or ""),
+            str(record.get("begin_time") or record.get("beginTime") or ""),
+            str(record.get("end_time") or record.get("endTime") or ""),
+        ]
+    )
+
+
+def _seminar_task_matches_record(task: dict[str, Any], record: dict[str, Any]) -> bool:
+    task_record_id = str(task.get("record_id") or "").strip()
+    record_id = str(record.get("id") or "").strip()
+    if task_record_id and record_id:
+        return task_record_id == record_id
+
+    task_area_id = str(task.get("area_id") or "").strip()
+    record_area_id = str(record.get("area_id") or record.get("areaId") or "").strip()
+    if task_area_id and record_area_id and task_area_id != record_area_id:
+        return False
+
+    task_title = _normalize_compare_text(task.get("title"))
+    record_title = _normalize_compare_text(record.get("title"))
+    if task_title and record_title and task_title != record_title:
+        return False
+
+    task_room = _normalize_compare_text(task.get("room_name"))
+    if task_room:
+        room_candidates = [
+            _normalize_compare_text(record.get("nameMerge")),
+            _normalize_compare_text(record.get("name")),
+            _normalize_compare_text(record.get("area")),
+            _normalize_compare_text(record.get("areaName")),
+        ]
+        room_candidates = [item for item in room_candidates if item]
+        if room_candidates and not any(task_room in item or item in task_room for item in room_candidates):
+            return False
+
+    task_time = _normalize_compare_text(_task_time_text(task))
+    record_time = _normalize_compare_text(_record_time_text(record))
+    if task_time and record_time:
+        for segment in (
+            str(task.get("start_date") or ""),
+            str(task.get("start_time") or ""),
+            str(task.get("end_date") or ""),
+            str(task.get("end_time") or ""),
+        ):
+            normalized = _normalize_compare_text(segment)
+            if normalized and normalized not in record_time:
+                return False
+
+    return True
+
+
+def _resolve_seminar_record_for_task(bot: Any, task: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    record_id_text = str(task.get("record_id") or "").strip()
+    record_type_text = str(task.get("record_type") or "1").strip() or "1"
+    if record_type_text not in {"1", "2"}:
+        record_type_text = "1"
+
+    for page in range(1, 4):
+        result = bot.list_seminar_records(
+            record_type=record_type_text,
+            page=page,
+            limit=20,
+            mode="books",
+        )
+        if not result.get("success"):
+            return None, str(result.get("msg") or "查询研讨室预约记录失败")
+        records = result.get("records") or []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if record_id_text and str(record.get("id") or "").strip() == record_id_text:
+                return record, ""
+            if _seminar_task_matches_record(task, record):
+                return record, ""
+        if len(records) < 20:
+            break
+
+    return None, "未找到对应的研讨室预约记录"
+
+
+def _find_seminar_record_by_id(bot: Any, record_id: str) -> dict[str, Any] | None:
+    record_id_text = str(record_id or "").strip()
+    if not record_id_text:
+        return None
+
+    for record_type_text in ("1", "2"):
+        for page in range(1, 4):
+            result = bot.list_seminar_records(
+                record_type=record_type_text,
+                page=page,
+                limit=20,
+                mode="books",
+            )
+            if not result.get("success"):
+                break
+            records = result.get("records") or []
+            for record in records:
+                if str(record.get("id") or "").strip() == record_id_text:
+                    return record
+            if len(records) < 20:
+                break
+    return None
+
+
+def _build_seminar_signin_task(result: dict[str, Any]) -> dict[str, Any] | None:
+    if not result.get("success"):
+        return None
+
+    payload = result.get("payload_summary") or {}
+    area_id = str(payload.get("area_id") or "").strip()
+    times = payload.get("time") or []
+    if not area_id or not isinstance(times, list) or not times:
+        return None
+
+    first_time = times[0] if isinstance(times[0], dict) else {}
+    last_time = times[-1] if isinstance(times[-1], dict) else first_time
+    start_date = str(payload.get("start_date") or "").strip()
+    end_date = str(payload.get("end_date") or start_date).strip()
+    start_time = str(first_time.get("start_time") or "").strip()
+    end_time = str(last_time.get("end_time") or "").strip()
+    if not start_date or not start_time:
+        return None
+
+    start_dt = _parse_dt_text(f"{start_date} {start_time}")
+    if start_dt is None:
+        return None
+
+    end_dt = _parse_dt_text(f"{end_date or start_date} {end_time}") if end_time else None
+    sign_at = start_dt - timedelta(minutes=10)
+    response_data = result.get("data") or {}
+    now_text = _format_dt_text(_now_dt())
+    record_type_text = str(result.get("record_type") or "").strip() or str(
+        (result.get("detail_summary") or {}).get("type_id") or "1"
+    ).strip()
+    if record_type_text not in {"1", "2"}:
+        record_type_text = "1"
+
+    return {
+        "task_id": uuid.uuid4().hex,
+        "record_id": _extract_seminar_record_id(response_data),
+        "record_type": record_type_text,
+        "area_id": area_id,
+        "room_name": str(result.get("room_name") or (result.get("detail_summary") or {}).get("room_name") or "").strip(),
+        "title": str(response_data.get("title") or result.get("title") or "").strip()
+        if isinstance(response_data, dict)
+        else "",
+        "start_date": start_date,
+        "start_time": start_time,
+        "end_date": end_date,
+        "end_time": end_time,
+        "start_at": _format_dt_text(start_dt),
+        "end_at": _format_dt_text(end_dt),
+        "sign_at": _format_dt_text(sign_at),
+        "status": "pending",
+        "attempts": 0,
+        "last_msg": "",
+        "created_at": now_text,
+        "updated_at": now_text,
+    }
+
+
+def _upsert_seminar_signin_task(task: dict[str, Any]) -> dict[str, Any]:
+    with _SEMINAR_SIGNIN_TASK_LOCK:
+        tasks = _load_seminar_signin_tasks()
+        for item in tasks:
+            if not isinstance(item, dict):
+                continue
+            same_record = task.get("record_id") and str(item.get("record_id") or "") == str(task.get("record_id") or "")
+            same_slot = (
+                str(item.get("area_id") or "") == str(task.get("area_id") or "")
+                and str(item.get("start_date") or "") == str(task.get("start_date") or "")
+                and str(item.get("start_time") or "") == str(task.get("start_time") or "")
+                and str(item.get("end_date") or "") == str(task.get("end_date") or "")
+                and str(item.get("end_time") or "") == str(task.get("end_time") or "")
+            )
+            if not same_record and not same_slot:
+                continue
+            item.update({k: v for k, v in task.items() if v not in ("", None)})
+            item["status"] = "pending"
+            item["updated_at"] = _format_dt_text(_now_dt())
+            _save_seminar_signin_tasks(tasks)
+            return item
+        tasks.append(task)
+        _save_seminar_signin_tasks(tasks)
+    return task
+
+
+def _update_seminar_signin_tasks_for_record(record_id: str, **fields: Any) -> int:
+    record_id_text = str(record_id or "").strip()
+    if not record_id_text:
+        return 0
+
+    updated = 0
+    with _SEMINAR_SIGNIN_TASK_LOCK:
+        tasks = _load_seminar_signin_tasks()
+        now_text = _format_dt_text(_now_dt())
+        for task in tasks:
+            if str(task.get("record_id") or "").strip() != record_id_text:
+                continue
+            task.update(fields)
+            task["updated_at"] = now_text
+            updated += 1
+        if updated:
+            _save_seminar_signin_tasks(tasks)
+    return updated
+
+
+def _update_seminar_signin_tasks_for_record_snapshot(record: dict[str, Any], **fields: Any) -> int:
+    if not isinstance(record, dict):
+        return 0
+
+    updated = 0
+    with _SEMINAR_SIGNIN_TASK_LOCK:
+        tasks = _load_seminar_signin_tasks()
+        now_text = _format_dt_text(_now_dt())
+        for task in tasks:
+            if not _seminar_task_matches_record(task, record):
+                continue
+            task.update(fields)
+            if str(task.get("record_id") or "").strip() == "":
+                task["record_id"] = str(record.get("id") or "").strip()
+            task["updated_at"] = now_text
+            updated += 1
+        if updated:
+            _save_seminar_signin_tasks(tasks)
+    return updated
+
+
+def _process_seminar_signin_tasks(
+    *,
+    due_only: bool = True,
+    task_id: str = "",
+    trigger: str = "manual",
+) -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用", "tasks": []}
+
+    with _SEMINAR_SIGNIN_TASK_LOCK:
+        tasks = _load_seminar_signin_tasks()
+
+    if not tasks:
+        return {
+            "success": True,
+            "msg": "当前没有待处理的研讨室签到任务",
+            "trigger": trigger,
+            "tasks": [],
+            "processed_count": 0,
+            "success_count": 0,
+            "failed_count": 0,
+        }
+
+    target_task_id = str(task_id or "").strip()
+    now = _now_dt()
+    due_tasks: list[dict[str, Any]] = []
+    for task in tasks:
+        status_text = str(task.get("status") or "").strip() or "pending"
+        if status_text in {"success", "cancelled", "expired"}:
+            continue
+        if target_task_id and str(task.get("task_id") or "").strip() != target_task_id:
+            continue
+        sign_at = _parse_dt_text(task.get("sign_at"))
+        start_at = _parse_dt_text(task.get("start_at"))
+        if due_only and sign_at and sign_at > now:
+            continue
+        if start_at and now > start_at + timedelta(minutes=30):
+            task["status"] = "expired"
+            task["last_msg"] = "已超过签到可处理时间"
+            task["updated_at"] = _format_dt_text(now)
+            continue
+        due_tasks.append(task)
+
+    with _SEMINAR_SIGNIN_TASK_LOCK:
+        _save_seminar_signin_tasks(tasks)
+
+    if not due_tasks:
+        return {
+            "success": True,
+            "msg": "当前没有到点的研讨室签到任务",
+            "trigger": trigger,
+            "tasks": [_seminar_task_summary(task) for task in tasks],
+            "processed_count": 0,
+            "success_count": 0,
+            "failed_count": 0,
+        }
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号", "tasks": [_seminar_task_summary(task) for task in tasks]}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed({"tasks": [_seminar_task_summary(task) for task in tasks]})
+
+    success_count = 0
+    failed_count = 0
+    processed_count = 0
+    now_text = _format_dt_text(now)
+    for task in due_tasks:
+        processed_count += 1
+        task["attempts"] = int(task.get("attempts") or 0) + 1
+        task["updated_at"] = now_text
+
+        record, record_msg = _resolve_seminar_record_for_task(bot, task)
+        if record is None:
+            task["last_msg"] = record_msg or "未找到对应预约记录"
+            failed_count += 1
+            continue
+
+        record_id_text = str(record.get("id") or "").strip()
+        if record_id_text:
+            task["record_id"] = record_id_text
+
+        sign_result = bot.sign_in_seminar_record(record_id_text)
+        task["last_result"] = sign_result
+        task["last_msg"] = str(sign_result.get("msg") or "")
+        if sign_result.get("success"):
+            task["status"] = "success"
+            task["record"] = _seminar_record_summary(record)
+            success_count += 1
+            continue
+
+        message_text = str(sign_result.get("msg") or "")
+        if any(keyword in message_text for keyword in ("已签到", "签到成功")):
+            task["status"] = "success"
+            task["record"] = _seminar_record_summary(record)
+            success_count += 1
+        elif any(keyword in message_text for keyword in ("已取消", "不存在", "已违约", "无此记录")):
+            task["status"] = "cancelled"
+            failed_count += 1
+        else:
+            failed_count += 1
+
+    _save_library_cookies(bot.get_cookies())
+    with _SEMINAR_SIGNIN_TASK_LOCK:
+        _save_seminar_signin_tasks(tasks)
+
+    return {
+        "success": True,
+        "msg": "研讨室自动签到扫描完成",
+        "trigger": trigger,
+        "tasks": [_seminar_task_summary(task) for task in tasks],
+        "processed_count": processed_count,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "now": now_text,
+    }
+
+
+def _ensure_seminar_auto_signin_worker() -> None:
+    global _SEMINAR_AUTO_SIGNIN_THREAD
+    with _SEMINAR_AUTO_SIGNIN_THREAD_LOCK:
+        if _SEMINAR_AUTO_SIGNIN_THREAD and _SEMINAR_AUTO_SIGNIN_THREAD.is_alive():
+            return
+
+        def _worker() -> None:
+            while True:
+                try:
+                    _process_seminar_signin_tasks(due_only=True, trigger="background")
+                except Exception:
+                    pass
+                time.sleep(SEMINAR_AUTO_SIGNIN_INTERVAL_SECONDS)
+
+        _SEMINAR_AUTO_SIGNIN_THREAD = threading.Thread(
+            target=_worker,
+            name="seminar-auto-signin",
+            daemon=True,
+        )
+        _SEMINAR_AUTO_SIGNIN_THREAD.start()
+
+
+def _resolve_seminar_members(
+    student_id: str,
+    group_name: str = "",
+    member_ids: str = "",
+) -> tuple[list[str], str]:
+    sid = str(student_id or "").strip()
+    manual = _parse_csv_text(member_ids)
+    if manual:
+        unique = []
+        seen: set[str] = set()
+        for item in manual:
+            if item == sid or item in seen:
+                continue
+            seen.add(item)
+            unique.append(item)
+        return unique, ""
+
+    group_text = str(group_name or "").strip()
+    if not group_text:
+        return [], ""
+
+    groups = _load_seminar_groups()
+    raw = groups.get(group_text)
+    if not isinstance(raw, dict):
+        return [], f"未找到 group: {group_text}"
+
+    unique = []
+    seen: set[str] = set()
+    for item in raw.get("member_ids") or []:
+        text = str(item or "").strip()
+        if not text or text == sid or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique, ""
+
+
+def _resolve_option_ids_by_names(
+    options: list[dict[str, Any]],
+    names: list[str],
+    *,
+    id_key: str = "id",
+) -> list[str]:
+    if not names:
+        return []
+    results: list[str] = []
+    target_names = [str(name or "").strip() for name in names if str(name or "").strip()]
+    for option in options or []:
+        option_names = {
+            str(option.get("name") or "").strip(),
+            str(option.get("enname") or "").strip(),
+            str(option.get("label") or "").strip(),
+            str(option.get("title") or "").strip(),
+        }
+        option_names = {item for item in option_names if item}
+        if not option_names:
+            continue
+        for raw_name in target_names:
+            if raw_name in option_names or any(raw_name in item or item in raw_name for item in option_names):
+                option_id = str(option.get(id_key) or "").strip()
+                if option_id and option_id not in results:
+                    results.append(option_id)
+                break
+    return results
+
+
+def _resolve_floor_ids(
+    storey_options: list[dict[str, Any]],
+    floor_names: list[str],
+    library_ids: list[str],
+    floor_ids: list[str],
+) -> list[str]:
+    results: list[str] = []
+    if floor_ids:
+        results.extend([item for item in floor_ids if item])
+
+    if not floor_names:
+        return results
+
+    target_names = [str(name or "").strip() for name in floor_names if str(name or "").strip()]
+    for storey in storey_options or []:
+        storey_name = str(storey.get("name") or storey.get("enname") or "").strip()
+        if not storey_name:
+            continue
+        if not any(
+            floor_name == storey_name or floor_name in storey_name or storey_name in floor_name
+            for floor_name in target_names
+        ):
+            continue
+        for row in storey.get("list") or []:
+            floor_id = str(row.get("id") or "").strip()
+            parent_id = str(row.get("parentId") or "").strip()
+            if not floor_id:
+                continue
+            if library_ids and parent_id and parent_id not in library_ids:
+                continue
+            if floor_id not in results:
+                results.append(floor_id)
+    return results
+
+
 def _target_library_date(target_date: str | None = None) -> str:
     if not target_date:
         return (_now_dt().date() + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -776,22 +1419,47 @@ def _save_library_cookies(cookies: dict[str, Any]) -> None:
     save_json(LIBRARY_COOKIE_FILE, cookies)
 
 
+def _set_library_login_error(message: str) -> None:
+    global _LAST_LIBRARY_LOGIN_ERROR
+    _LAST_LIBRARY_LOGIN_ERROR = str(message or "").strip()
+
+
+def _library_login_error_message(default: str = "图书馆登录失败") -> str:
+    text = str(_LAST_LIBRARY_LOGIN_ERROR or "").strip()
+    return text or default
+
+
+def _library_login_failed(extra: dict[str, Any] | None = None, default: str = "图书馆登录失败") -> dict[str, Any]:
+    result = {"success": False, "msg": _library_login_error_message(default)}
+    if extra:
+        result.update(extra)
+    return result
+
+
 def _build_library_bot(student_id: str, password: str):
     if HenuLibraryBot is None:
         raise RuntimeError(f"图书馆核心模块不可用: {LIBRARY_CORE_EXPECTED_FILE}")
 
+    _set_library_login_error("")
     stored = _load_library_cookies()
     bot = HenuLibraryBot(student_id, password, stored or None)  # type: ignore
     if bot.login():
         _save_library_cookies(bot.get_cookies())
+        _set_library_login_error("")
         return bot
 
+    first_error = str(getattr(bot, "get_last_error", lambda: "")() or "").strip()
     if stored:
         fresh_bot = HenuLibraryBot(student_id, password, None)  # type: ignore
         if fresh_bot.login():
             _save_library_cookies(fresh_bot.get_cookies())
+            _set_library_login_error("")
             return fresh_bot
+        fresh_error = str(getattr(fresh_bot, "get_last_error", lambda: "")() or "").strip()
+        _set_library_login_error(fresh_error or first_error)
+        return None
 
+    _set_library_login_error(first_error)
     return None
 
 
@@ -1186,7 +1854,7 @@ def _library_reserve_impl(
     
     bot = _build_library_bot(sid, pwd)
     if not bot:
-        return {"success": False, "msg": "图书馆登录失败"}
+        return _library_login_failed()
 
     result = bot.reserve(target_location, target_seat, target_date, preferred_time=str(preferred_time or "08:00"))
     _save_library_cookies(bot.get_cookies())
@@ -1215,10 +1883,472 @@ def _library_records_impl(record_type: str = "1", page: int = 1, limit: int = 20
     
     bot = _build_library_bot(sid, pwd)
     if not bot:
-        return {"success": False, "msg": "图书馆登录失败", "records": []}
+        return _library_login_failed({"records": []})
 
     _save_library_cookies(bot.get_cookies())
     return bot.list_seat_records(record_type=record_type, page=page, limit=limit)
+
+
+def _library_current_impl() -> dict[str, Any]:
+    """
+    查询图书馆当前预约，用于判断是否存在可签到记录。
+    """
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用", "appointments": []}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号", "appointments": []}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed({"appointments": []})
+
+    result = bot.list_current_appointments()
+    _save_library_cookies(bot.get_cookies())
+    return result
+
+
+def _library_auto_signin_impl(record_id: str = "") -> dict[str, Any]:
+    """
+    对当前图书馆预约执行自动签到。
+    """
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用"}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号"}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed()
+
+    result = bot.auto_sign_in(record_id=str(record_id or "").strip())
+    _save_library_cookies(bot.get_cookies())
+    return result
+
+
+def _seminar_groups_impl() -> dict[str, Any]:
+    groups = _load_seminar_groups()
+    items = [_seminar_group_summary(name, item if isinstance(item, dict) else {}) for name, item in groups.items()]
+    items.sort(key=lambda item: item.get("group_name", ""))
+    return {"success": True, "groups": items, "total": len(items)}
+
+
+def _seminar_group_save_impl(group_name: str, member_ids: str, note: str = "") -> dict[str, Any]:
+    name = str(group_name or "").strip()
+    if not name:
+        return {"success": False, "msg": "group_name 不能为空"}
+
+    parsed_ids = _parse_csv_text(member_ids)
+    if not parsed_ids:
+        return {"success": False, "msg": "member_ids 不能为空"}
+
+    unique_ids: list[str] = []
+    seen: set[str] = set()
+    for item in parsed_ids:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique_ids.append(item)
+
+    if len(unique_ids) < 3 or len(unique_ids) > 9:
+        return {
+            "success": False,
+            "msg": "group 需保存 3-9 位同行成员学号（不含自己），这样总人数才会落在 4-10 人范围内",
+        }
+
+    groups = _load_seminar_groups()
+    groups[name] = {
+        "member_ids": unique_ids,
+        "note": str(note or "").strip(),
+        "updated_at": _now_dt().isoformat(timespec="seconds"),
+    }
+    _save_seminar_groups(groups)
+    return {
+        "success": True,
+        "msg": "研讨室 group 已保存",
+        "group": _seminar_group_summary(name, groups[name]),
+    }
+
+
+def _seminar_group_delete_impl(group_name: str) -> dict[str, Any]:
+    name = str(group_name or "").strip()
+    if not name:
+        return {"success": False, "msg": "group_name 不能为空"}
+
+    groups = _load_seminar_groups()
+    if name not in groups:
+        return {"success": False, "msg": f"未找到 group: {name}"}
+
+    deleted = groups.pop(name)
+    _save_seminar_groups(groups)
+    return {
+        "success": True,
+        "msg": "研讨室 group 已删除",
+        "group": _seminar_group_summary(name, deleted if isinstance(deleted, dict) else {}),
+    }
+
+
+def _seminar_filters_impl() -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用", "filters": {}}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号", "filters": {}}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed({"filters": {}})
+
+    result = bot.seminar_filter_options()
+    _save_library_cookies(bot.get_cookies())
+    return result
+
+
+def _seminar_records_impl(
+    record_type: str = "1",
+    page: int = 1,
+    limit: int = 20,
+    mode: str = "books",
+) -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用", "records": []}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号", "records": []}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed({"records": []})
+
+    result = bot.list_seminar_records(
+        record_type=str(record_type or "1").strip(),
+        page=page,
+        limit=limit,
+        mode=str(mode or "books").strip(),
+    )
+    _save_library_cookies(bot.get_cookies())
+    return result
+
+
+def _seminar_signin_tasks_impl(status: str = "") -> dict[str, Any]:
+    status_filters = {item.lower() for item in _parse_csv_text(status)}
+    with _SEMINAR_SIGNIN_TASK_LOCK:
+        tasks = _load_seminar_signin_tasks()
+
+    items = [_seminar_task_summary(task) for task in tasks]
+    if status_filters:
+        items = [item for item in items if str(item.get("status") or "").lower() in status_filters]
+
+    items.sort(key=lambda item: (str(item.get("sign_at") or ""), str(item.get("created_at") or "")))
+    return {"success": True, "tasks": items, "total": len(items), "task_file": str(SEMINAR_SIGNIN_TASK_FILE)}
+
+
+def _seminar_rooms_impl(
+    target_date: str = "",
+    members: int = 0,
+    name: str = "",
+    room: str = "",
+    start_time: str = "",
+    end_time: str = "",
+    library_ids: str = "",
+    library_names: str = "",
+    floor_ids: str = "",
+    floor_names: str = "",
+    category_ids: str = "",
+    category_names: str = "",
+    boutique_ids: str = "",
+    boutique_names: str = "",
+    page: int = 1,
+) -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用", "rooms": []}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号", "rooms": []}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed({"rooms": []})
+
+    filters_result = bot.seminar_filter_options()
+    if not filters_result.get("success"):
+        _save_library_cookies(bot.get_cookies())
+        return {"success": False, "msg": filters_result.get("msg", "获取筛选项失败"), "rooms": []}
+
+    filters = filters_result.get("filters") or {}
+    library_id_list = _parse_csv_text(library_ids)
+    category_id_list = _parse_csv_text(category_ids)
+    boutique_id_list = _parse_csv_text(boutique_ids)
+    floor_id_list = _parse_csv_text(floor_ids)
+
+    if not library_id_list:
+        library_id_list = _resolve_option_ids_by_names(filters.get("premises") or [], _parse_csv_text(library_names))
+    if not category_id_list:
+        category_id_list = _resolve_option_ids_by_names(filters.get("category") or [], _parse_csv_text(category_names))
+    if not boutique_id_list:
+        boutique_id_list = _resolve_option_ids_by_names(filters.get("boutique") or [], _parse_csv_text(boutique_names))
+
+    floor_name_list = _parse_csv_text(floor_names)
+    resolved_floor_ids = _resolve_floor_ids(
+        filters.get("storey") or [],
+        floor_name_list,
+        library_id_list,
+        floor_id_list,
+    )
+
+    payload: dict[str, Any] = {
+        "premises": library_id_list,
+        "members": str(int(members)) if int(members) > 0 else "",
+        "date": str(target_date or "").strip() or _now_dt().strftime("%Y-%m-%d"),
+        "floor": resolved_floor_ids,
+        "category": category_id_list,
+        "room": str(room or "").strip(),
+        "name": str(name or "").strip(),
+        "boutique": boutique_id_list,
+        "page": max(1, int(page)),
+    }
+    start_hhmm = str(start_time or "").strip()
+    end_hhmm = str(end_time or "").strip()
+    if start_hhmm and end_hhmm:
+        payload["start_time"] = start_hhmm
+        payload["end_time"] = end_hhmm
+
+    result = bot.seminar_list(payload)
+    _save_library_cookies(bot.get_cookies())
+    result["resolved_query"] = {
+        "library_ids": library_id_list,
+        "floor_ids": resolved_floor_ids,
+        "category_ids": category_id_list,
+        "boutique_ids": boutique_id_list,
+        "date": payload["date"],
+        "members": payload["members"],
+        "room": payload["room"],
+        "name": payload["name"],
+        "start_time": payload.get("start_time", ""),
+        "end_time": payload.get("end_time", ""),
+        "page": payload["page"],
+    }
+    return result
+
+
+def _seminar_room_detail_impl(area_id: str, target_date: str = "") -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用"}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号"}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed()
+
+    detail_result = bot.seminar_detail(area_id)
+    if not detail_result.get("success"):
+        _save_library_cookies(bot.get_cookies())
+        return detail_result
+
+    apply_result = bot.seminar_apply_info(area_id, day=str(target_date or "").strip())
+    _save_library_cookies(bot.get_cookies())
+    if not apply_result.get("success"):
+        return {
+            "success": False,
+            "msg": apply_result.get("msg", "查询研讨室预约信息失败"),
+            "detail": detail_result.get("detail", {}),
+        }
+
+    detail = detail_result.get("detail") or {}
+    apply_info = apply_result.get("apply_info") or {}
+    axis = apply_info.get("axis") or {}
+    return {
+        "success": True,
+        "msg": "操作成功",
+        "detail": detail,
+        "apply_info": apply_info,
+        "date_options": axis.get("date") or [],
+        "date_rows": axis.get("list") or [],
+        "categories": axis.get("category") or [],
+        "titles": detail.get("titles") or [],
+        "constraints": {
+            "min_person": detail.get("minPerson"),
+            "max_person": detail.get("maxPerson"),
+            "readonly_title": detail.get("readonlyTitle"),
+            "earlier_periods": detail.get("earlierPeriods"),
+            "type_id": detail.get("type_id") or detail.get("typeId"),
+        },
+    }
+
+
+def _seminar_reserve_impl(
+    area_id: str,
+    target_date: str = "",
+    start_time: str = "",
+    end_time: str = "",
+    end_date: str = "",
+    title: str = "",
+    title_id: str = "",
+    content: str = "",
+    mobile: str = "",
+    group_name: str = "",
+    member_ids: str = "",
+    is_open: int = 0,
+    cate_id: str = "",
+    time_ranges_json: str = "",
+) -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用"}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号"}
+
+    resolved_members, group_err = _resolve_seminar_members(
+        sid,
+        group_name=str(group_name or "").strip(),
+        member_ids=str(member_ids or "").strip(),
+    )
+    if group_err:
+        return {"success": False, "msg": group_err}
+
+    mobile_text = str(mobile or "").strip() or _saved_seminar_mobile()
+    if not mobile_text:
+        return {"success": False, "msg": "请提供 mobile，或先使用一次 seminar_reserve 保存默认手机号"}
+
+    parsed_time_ranges: list[dict[str, Any]] = []
+    if str(time_ranges_json or "").strip():
+        try:
+            data = json.loads(str(time_ranges_json))
+            if not isinstance(data, list):
+                return {"success": False, "msg": "time_ranges_json 必须是 JSON 数组"}
+            for item in data:
+                if not isinstance(item, dict):
+                    return {"success": False, "msg": "time_ranges_json 中每项都必须是对象"}
+                start_hhmm = str(item.get("start_time") or "").strip()
+                end_hhmm = str(item.get("end_time") or "").strip()
+                if not start_hhmm or not end_hhmm:
+                    return {"success": False, "msg": "time_ranges_json 中每项都必须包含 start_time/end_time"}
+                parsed_time_ranges.append({"start_time": start_hhmm, "end_time": end_hhmm})
+        except json.JSONDecodeError:
+            return {"success": False, "msg": "time_ranges_json 不是合法 JSON"}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed()
+
+    result = bot.reserve_seminar_room(
+        area_id=str(area_id or "").strip(),
+        target_date=str(target_date or "").strip(),
+        start_time=str(start_time or "").strip(),
+        end_time=str(end_time or "").strip(),
+        end_date=str(end_date or "").strip(),
+        title=str(title or "").strip(),
+        title_id=str(title_id or "").strip(),
+        content=str(content or "").strip(),
+        mobile=mobile_text,
+        member_ids=resolved_members,
+        self_id=sid,
+        is_open=int(is_open or 0),
+        cate_id=str(cate_id or "").strip(),
+        time_ranges=parsed_time_ranges,
+        files=[],
+    )
+    _save_library_cookies(bot.get_cookies())
+    if result.get("success") and mobile_text != _saved_seminar_mobile():
+        _save_profile_fields({"seminar_mobile": mobile_text})
+    if result.get("success"):
+        task = _build_seminar_signin_task(result)
+        if task:
+            saved_task = _upsert_seminar_signin_task(task)
+            result["auto_signin_task"] = _seminar_task_summary(saved_task)
+            _ensure_seminar_auto_signin_worker()
+    result["group_name"] = str(group_name or "").strip()
+    result["member_ids"] = resolved_members
+    return result
+
+
+def _seminar_signin_impl(record_id: str) -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用"}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号"}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed()
+
+    record_id_text = str(record_id or "").strip()
+    record_snapshot = _find_seminar_record_by_id(bot, record_id_text)
+    result = bot.sign_in_seminar_record(record_id=record_id_text)
+    _save_library_cookies(bot.get_cookies())
+    if result.get("success"):
+        updated = _update_seminar_signin_tasks_for_record(
+            record_id=record_id_text,
+            status="success",
+            last_msg=str(result.get("msg") or ""),
+            last_result=result,
+        )
+        if not updated and record_snapshot:
+            _update_seminar_signin_tasks_for_record_snapshot(
+                record_snapshot,
+                status="success",
+                last_msg=str(result.get("msg") or ""),
+                last_result=result,
+            )
+    return result
+
+
+def _seminar_auto_signin_impl() -> dict[str, Any]:
+    return _process_seminar_signin_tasks(due_only=True, trigger="manual")
+
+
+def _seminar_cancel_impl(record_id: str) -> dict[str, Any]:
+    if HenuLibraryBot is None:
+        return {"success": False, "msg": "图书馆模块不可用"}
+
+    profile = load_json(PROFILE_FILE)
+    sid, pwd = str(profile.get("student_id", "")), str(profile.get("password", ""))
+    if not sid or not pwd:
+        return {"success": False, "msg": "缺少账号"}
+
+    bot = _build_library_bot(sid, pwd)
+    if not bot:
+        return _library_login_failed()
+
+    record_id_text = str(record_id or "").strip()
+    record_snapshot = _find_seminar_record_by_id(bot, record_id_text)
+    result = bot.cancel_seminar_record(record_id=record_id_text)
+    _save_library_cookies(bot.get_cookies())
+    if result.get("success"):
+        updated = _update_seminar_signin_tasks_for_record(
+            record_id=record_id_text,
+            status="cancelled",
+            last_msg=str(result.get("msg") or ""),
+            last_result=result,
+        )
+        if not updated and record_snapshot:
+            _update_seminar_signin_tasks_for_record_snapshot(
+                record_snapshot,
+                status="cancelled",
+                last_msg=str(result.get("msg") or ""),
+                last_result=result,
+            )
+    return result
 
 
 def _library_cancel_impl(record_id: str, record_type: str = "auto") -> dict[str, Any]:
@@ -1239,7 +2369,7 @@ def _library_cancel_impl(record_id: str, record_type: str = "auto") -> dict[str,
     
     bot = _build_library_bot(sid, pwd)
     if not bot:
-        return {"success": False, "msg": "图书馆登录失败"}
+        return _library_login_failed()
 
     result = bot.cancel_seat_record(record_id=str(record_id), record_type=str(record_type or "1"))
     _save_library_cookies(bot.get_cookies())
@@ -1408,6 +2538,37 @@ def library_records(record_type: str = "1", page: int = 1, limit: int = 20) -> d
 
 
 @mcp.tool()
+def library_current() -> dict[str, Any]:
+    """
+    【必须调用】查询图书馆当前预约 - 获取当前可操作的实时预约状态
+
+    【执行协议（必须遵守）】
+    1) 禁止凭猜测说“你当前有/没有预约”，必须先调用本工具。
+    2) 回复必须基于本次返回中的 appointments。
+    3) 如查询失败，必须明确说明失败原因。
+
+    功能：返回当前有效预约列表，可用于判断是否存在可签到记录。
+    """
+    return _library_current_impl()
+
+
+@mcp.tool()
+def library_auto_signin(record_id: str = "") -> dict[str, Any]:
+    """
+    【必须调用】图书馆自动签到 - 对当前预约执行真实签到操作
+
+    【执行协议（必须遵守）】
+    1) 禁止在未调用本工具前说“已签到”。
+    2) 回复时只可依据本次返回的 success/msg/sign_path/record 字段。
+    3) 若没有可签到记录或签到失败，必须如实说明原因。
+
+    功能：自动查找当前可签到的图书馆座位预约并执行签到。
+    record_id 留空时自动选择当前可签到记录；传入后只对指定记录尝试签到。
+    """
+    return _library_auto_signin_impl(record_id=record_id)
+
+
+@mcp.tool()
 def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
     """
     【必须调用】取消图书馆预约 - 执行真实的取消操作
@@ -1423,6 +2584,217 @@ def library_cancel(record_id: str, record_type: str = "auto") -> dict[str, Any]:
     重要：不要假装取消成功，必须调用此工具执行真实的取消操作。
     """
     return _library_cancel_impl(record_id=record_id, record_type=record_type)
+
+
+@mcp.tool()
+def seminar_groups() -> dict[str, Any]:
+    """
+    查看已保存的研讨室 group。
+
+    功能：返回本地保存的各个 group 名称及成员学号列表。
+    """
+    return _seminar_groups_impl()
+
+
+@mcp.tool()
+def seminar_group_save(group_name: str, member_ids: str, note: str = "") -> dict[str, Any]:
+    """
+    保存研讨室预约 group。
+
+    参数：
+    - group_name: group 名称
+    - member_ids: 学号列表，支持逗号/空格/换行分隔
+    - note: 备注
+
+    功能：把一组成员学号保存到本地，后续研讨室预约可直接引用 group_name。
+    """
+    return _seminar_group_save_impl(group_name=group_name, member_ids=member_ids, note=note)
+
+
+@mcp.tool()
+def seminar_group_delete(group_name: str) -> dict[str, Any]:
+    """
+    删除已保存的研讨室 group。
+    """
+    return _seminar_group_delete_impl(group_name=group_name)
+
+
+@mcp.tool()
+def seminar_filters() -> dict[str, Any]:
+    """
+    查询研讨室筛选项。
+
+    功能：返回馆舍、楼层、分类、特色标签等筛选项，用于后续查房间。
+    """
+    return _seminar_filters_impl()
+
+
+@mcp.tool()
+def seminar_records(
+    record_type: str = "1",
+    page: int = 1,
+    limit: int = 20,
+    mode: str = "books",
+) -> dict[str, Any]:
+    """
+    查询研讨室预约记录。
+
+    参数：
+    - record_type: 1(普通空间) / 2(大型空间)
+    - mode: books(当前/历史预约) / reneges(违约/取消记录)
+    - page/limit: 分页参数
+    """
+    return _seminar_records_impl(record_type=record_type, page=page, limit=limit, mode=mode)
+
+
+@mcp.tool()
+def seminar_signin_tasks(status: str = "") -> dict[str, Any]:
+    """
+    查看研讨室自动签到任务。
+
+    参数：
+    - status: 可选，按状态过滤，支持逗号分隔，如 `pending,success`
+    """
+    return _seminar_signin_tasks_impl(status=status)
+
+
+@mcp.tool()
+def seminar_signin(record_id: str) -> dict[str, Any]:
+    """
+    对指定研讨室预约记录执行真实签到。
+
+    建议先通过 seminar_records 或 seminar_signin_tasks 获取 record_id。
+    """
+    return _seminar_signin_impl(record_id=record_id)
+
+
+@mcp.tool()
+def seminar_auto_signin() -> dict[str, Any]:
+    """
+    扫描所有已到点的研讨室自动签到任务并执行签到。
+
+    预约成功后会自动登记任务；该工具可用于手动触发一次补扫。
+    """
+    return _seminar_auto_signin_impl()
+
+
+@mcp.tool()
+def seminar_rooms(
+    target_date: str = "",
+    members: int = 0,
+    name: str = "",
+    room: str = "",
+    start_time: str = "",
+    end_time: str = "",
+    library_ids: str = "",
+    library_names: str = "",
+    floor_ids: str = "",
+    floor_names: str = "",
+    category_ids: str = "",
+    category_names: str = "",
+    boutique_ids: str = "",
+    boutique_names: str = "",
+    page: int = 1,
+) -> dict[str, Any]:
+    """
+    查询可预约的研讨室列表。
+
+    参数均为可选：
+    - target_date: 日期 YYYY-MM-DD
+    - members: 人数，默认 5
+    - name: 房间名称关键词
+    - room: 房型/房间筛选值
+    - start_time/end_time: 时间范围 HH:MM
+    - library_ids/library_names: 馆舍筛选
+    - floor_ids/floor_names: 楼层筛选
+    - category_ids/category_names: 分类筛选
+    - boutique_ids/boutique_names: 特色标签筛选
+    - page: 页码
+    """
+    return _seminar_rooms_impl(
+        target_date=target_date,
+        members=members,
+        name=name,
+        room=room,
+        start_time=start_time,
+        end_time=end_time,
+        library_ids=library_ids,
+        library_names=library_names,
+        floor_ids=floor_ids,
+        floor_names=floor_names,
+        category_ids=category_ids,
+        category_names=category_names,
+        boutique_ids=boutique_ids,
+        boutique_names=boutique_names,
+        page=page,
+    )
+
+
+@mcp.tool()
+def seminar_cancel(record_id: str) -> dict[str, Any]:
+    """
+    取消研讨室预约。
+
+    功能：对指定研讨室预约记录执行真实取消。
+    建议先通过 seminar_records 获取记录 id。
+    """
+    return _seminar_cancel_impl(record_id=record_id)
+
+
+@mcp.tool()
+def seminar_room_detail(area_id: str, target_date: str = "") -> dict[str, Any]:
+    """
+    查询研讨室详情和预约参数。
+
+    功能：返回房间详情、可选日期、时间段、主题选项和人数限制。
+    """
+    return _seminar_room_detail_impl(area_id=area_id, target_date=target_date)
+
+
+@mcp.tool()
+def seminar_reserve(
+    area_id: str,
+    target_date: str = "",
+    start_time: str = "",
+    end_time: str = "",
+    end_date: str = "",
+    title: str = "",
+    title_id: str = "",
+    content: str = "",
+    mobile: str = "",
+    group_name: str = "",
+    member_ids: str = "",
+    is_open: int = 0,
+    cate_id: str = "",
+    time_ranges_json: str = "",
+) -> dict[str, Any]:
+    """
+    预约研讨室。
+
+    重要规则：
+    1) 申请内容 `content` 必须多于 10 个字。
+    2) 实际总人数按“当前账号 + group/member_ids 成员”计算。
+    3) 支持通过 `group_name` 使用已保存 group，也支持直接传 `member_ids`。
+    4) 对于预设主题房间，需要传 `title_id`；普通房间传 `title`。
+    5) `time_ranges_json` 可传 JSON 数组以支持多时间段，例如
+       `[{"start_time":"09:00","end_time":"11:00"}]`
+    """
+    return _seminar_reserve_impl(
+        area_id=area_id,
+        target_date=target_date,
+        start_time=start_time,
+        end_time=end_time,
+        end_date=end_date,
+        title=title,
+        title_id=title_id,
+        content=content,
+        mobile=mobile,
+        group_name=group_name,
+        member_ids=member_ids,
+        is_open=is_open,
+        cate_id=cate_id,
+        time_ranges_json=time_ranges_json,
+    )
 
 
 @mcp.tool()
@@ -1518,6 +2890,7 @@ def system_status(timezone: str = "Asia/Shanghai") -> dict[str, Any]:
             "seat_no": _resolve_library_defaults()[1],
         },
         "library_cookie_file": str(LIBRARY_COOKIE_FILE),
+        "seminar_signin_tasks": _seminar_signin_tasks_impl(),
         "recent_output_files": list_output_files(limit=10),
     }
 
@@ -1553,4 +2926,5 @@ if __name__ == "__main__":
         mcp.settings.stateless_http = args.stateless_http
         mcp.settings.json_response = args.json_response
 
+    _ensure_seminar_auto_signin_worker()
     mcp.run(transport=args.transport)
